@@ -1,0 +1,17 @@
+# SC2 AI Bot dependencies
+# Python 3.14 compatible (tested 2026-06)
+
+# --- 游戏接口 ---
+burnysc2>=7.3.0
+
+# --- RL 框架 ---
+gymnasium>=1.0.0
+stable-baselines3>=2.4.0
+torch>=2.11.0
+
+# --- 工具 ---
+numpy>=2.0.0
+loguru>=0.7.0
+
+# --- 测试 ---
+pytest>=8.0.0
