@@ -1,4 +1,4 @@
-# 星海争霸 II AI Bot
+# 星际争霸 II AI Bot
 
 这是一个 StarCraft II 神族 Bot 项目，目标是逐步做出一个能感知战局、解释思路、并根据局势调整打法的对战 AI。
 
