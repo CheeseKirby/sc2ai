@@ -5,7 +5,7 @@ import json
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from rl.actions import ACTION_NAMES
 from rl.datasets import TrajectoryPathInput, discover_trajectory_files
@@ -15,6 +15,14 @@ from rl.observations import (
     infer_observation_schema_version,
     normalize_observation_dict,
     validate_observation_dict,
+)
+from rl.strategy_actions import STRATEGY_ACTION_NAMES
+from rl.strategy_observations import (
+    STRATEGY_OBSERVATION_DEFAULTS,
+    STRATEGY_OBSERVATION_FIELDS,
+    infer_strategy_observation_schema_version,
+    normalize_strategy_observation_dict,
+    validate_strategy_observation_dict,
 )
 
 
@@ -29,6 +37,52 @@ OBSERVATION_STAT_FIELDS: tuple[str, ...] = (
     "base_under_threat",
     "enemy_to_home_distance",
 )
+STRATEGY_OBSERVATION_STAT_FIELDS: tuple[str, ...] = (
+    "own_bases",
+    "pending_bases",
+    "ready_gateways",
+    "pending_gateways",
+    "ready_robo",
+    "pending_robo",
+    "ready_forge",
+    "pending_forge",
+    "ready_static_defense",
+    "pending_static_defense",
+    "army_count",
+    "immortals",
+    "observers",
+    "sentries",
+    "ground_weapon_level",
+    "ground_weapon_upgrade_pending",
+    "ground_armor_level",
+    "ground_armor_upgrade_pending",
+    "enemy_air_units_known",
+    "enemy_armored_units_known",
+    "enemy_cloaked_units_seen",
+    "worker_saturation_ratio",
+    "gateway_idle_count",
+    "robo_idle_count",
+    "base_under_air_threat",
+    "base_under_ground_threat",
+    "base_under_threat",
+    "enemy_to_home_distance",
+)
+
+
+@dataclass(frozen=True)
+class _DiagnosticsSpec:
+    """Trajectory schema details for army or strategy diagnostics."""
+
+    kind: str
+    action_key: str
+    action_names: dict[int, str]
+    observation_keys: tuple[str, ...]
+    observation_fields: tuple[str, ...]
+    observation_defaults: dict[str, float]
+    observation_stat_fields: tuple[str, ...]
+    infer_schema_version: Callable[[dict[str, float]], int | str | None]
+    validate_observation: Callable[..., None]
+    normalize_observation: Callable[..., dict[str, float]]
 
 
 @dataclass(frozen=True)
@@ -85,10 +139,12 @@ def diagnose_trajectories(
     *,
     require_terminal: bool = True,
     min_action_count: int = 10,
+    trajectory_kind: str = "army",
 ) -> TrajectoryDiagnostics:
     """Return health and coverage diagnostics for trajectory JSONL files."""
     if min_action_count < 0:
         raise ValueError("min_action_count must be >= 0")
+    spec = _diagnostics_spec(trajectory_kind)
     input_paths = [str(path) for path in _input_paths(paths)]
     files = discover_trajectory_files(paths)
 
@@ -107,7 +163,7 @@ def diagnose_trajectories(
     result_counts: Counter[str] = Counter()
     observation_schema_counts: Counter[str] = Counter()
     observation_feature_values: dict[str, list[float]] = {
-        field: [] for field in OBSERVATION_STAT_FIELDS
+        field: [] for field in spec.observation_stat_fields
     }
     file_summaries: list[FileTrajectoryDiagnostics] = []
 
@@ -153,27 +209,27 @@ def diagnose_trajectories(
                     first_step = step if first_step is None else min(first_step, step)
                     last_step = step if last_step is None else max(last_step, step)
 
-                action = _valid_action(row.get("action"))
+                action = _valid_action(row.get(spec.action_key), spec.action_names)
                 if action is None:
                     invalid_action_rows += 1
                 elif not done:
                     action_counts[action] += 1
                     file_action_counts[action] += 1
 
-                observation = row.get("observation")
+                observation = _row_observation(row, spec)
                 if not isinstance(observation, dict):
                     invalid_observation_rows += 1
                 else:
-                    schema_version = infer_observation_schema_version(observation)
+                    schema_version = spec.infer_schema_version(observation)
                     try:
-                        validate_observation_dict(
+                        spec.validate_observation(
                             observation,
                             allow_missing_defaults=True,
                         )
                     except ValueError:
                         invalid_observation_rows += 1
                     else:
-                        normalized_observation = normalize_observation_dict(
+                        normalized_observation = spec.normalize_observation(
                             observation,
                             allow_missing_defaults=True,
                         )
@@ -182,10 +238,10 @@ def diagnose_trajectories(
                         ] += 1
                         if any(
                             field not in observation
-                            for field in OBSERVATION_DEFAULTS
+                            for field in spec.observation_defaults
                         ):
                             rows_defaulted_observation_fields += 1
-                        for field in OBSERVATION_STAT_FIELDS:
+                        for field in spec.observation_stat_fields:
                             observation_feature_values[field].append(
                                 float(normalized_observation[field])
                             )
@@ -205,18 +261,21 @@ def diagnose_trajectories(
                 first_step=first_step,
                 last_step=last_step,
                 result_counts=dict(sorted(file_result_counts.items())),
-                action_counts_by_name=_counts_by_name(file_action_counts),
+                action_counts_by_name=_counts_by_name(
+                    file_action_counts,
+                    spec.action_names,
+                ),
                 missing_terminal=missing_terminal,
             )
         )
 
     missing_action_names = [
-        ACTION_NAMES[action_id]
-        for action_id in sorted(ACTION_NAMES)
+        spec.action_names[action_id]
+        for action_id in sorted(spec.action_names)
         if action_id not in action_counts
     ]
     low_count_action_names = [
-        ACTION_NAMES[action_id]
+        spec.action_names[action_id]
         for action_id, count in sorted(action_counts.items())
         if 0 < count < min_action_count
     ]
@@ -234,20 +293,20 @@ def diagnose_trajectories(
         invalid_json_rows=invalid_json_rows,
         invalid_action_rows=invalid_action_rows,
         invalid_observation_rows=invalid_observation_rows,
-        observation_dim=len(OBSERVATION_FIELDS),
+        observation_dim=len(spec.observation_fields),
         observation_schema_counts=dict(sorted(observation_schema_counts.items())),
         rows_defaulted_observation_fields=rows_defaulted_observation_fields,
         observation_feature_stats=_observation_feature_stats(
             observation_feature_values
         ),
-        action_names=ACTION_NAMES,
+        action_names=spec.action_names,
         action_counts=dict(sorted(action_counts.items())),
-        action_counts_by_name=_counts_by_name(action_counts),
+        action_counts_by_name=_counts_by_name(action_counts, spec.action_names),
         missing_action_names=missing_action_names,
         min_action_count=min_action_count,
         low_count_action_names=low_count_action_names,
         action_coverage=(
-            len(action_counts) / len(ACTION_NAMES) if ACTION_NAMES else 0.0
+            len(action_counts) / len(spec.action_names) if spec.action_names else 0.0
         ),
         result_counts=dict(sorted(result_counts.items())),
         rows_per_file=_series_stats(summary.rows for summary in file_summaries),
@@ -279,12 +338,49 @@ def _input_paths(paths: TrajectoryPathInput) -> tuple[str | Path, ...]:
     return tuple(paths)
 
 
-def _valid_action(value: Any) -> int | None:
+def _diagnostics_spec(kind: str) -> _DiagnosticsSpec:
+    if kind == "army":
+        return _DiagnosticsSpec(
+            kind="army",
+            action_key="action",
+            action_names=ACTION_NAMES,
+            observation_keys=("observation",),
+            observation_fields=OBSERVATION_FIELDS,
+            observation_defaults=OBSERVATION_DEFAULTS,
+            observation_stat_fields=OBSERVATION_STAT_FIELDS,
+            infer_schema_version=infer_observation_schema_version,
+            validate_observation=validate_observation_dict,
+            normalize_observation=normalize_observation_dict,
+        )
+    if kind == "strategy":
+        return _DiagnosticsSpec(
+            kind="strategy",
+            action_key="strategy_action",
+            action_names=STRATEGY_ACTION_NAMES,
+            observation_keys=("strategy_observation", "observation"),
+            observation_fields=STRATEGY_OBSERVATION_FIELDS,
+            observation_defaults=STRATEGY_OBSERVATION_DEFAULTS,
+            observation_stat_fields=STRATEGY_OBSERVATION_STAT_FIELDS,
+            infer_schema_version=infer_strategy_observation_schema_version,
+            validate_observation=validate_strategy_observation_dict,
+            normalize_observation=normalize_strategy_observation_dict,
+        )
+    raise ValueError("trajectory_kind must be 'army' or 'strategy'")
+
+
+def _row_observation(row: dict[str, Any], spec: _DiagnosticsSpec) -> Any:
+    for key in spec.observation_keys:
+        if key in row:
+            return row[key]
+    return None
+
+
+def _valid_action(value: Any, action_names: dict[int, str]) -> int | None:
     try:
         action = int(value)
     except (TypeError, ValueError):
         return None
-    if action not in ACTION_NAMES:
+    if action not in action_names:
         return None
     return action
 
@@ -302,11 +398,14 @@ def _result_key(value: Any) -> str:
     return str(value)
 
 
-def _counts_by_name(counts: Counter[int] | dict[int, int]) -> dict[str, int]:
+def _counts_by_name(
+    counts: Counter[int] | dict[int, int],
+    action_names: dict[int, str],
+) -> dict[str, int]:
     return {
-        ACTION_NAMES[action_id]: int(count)
+        action_names[action_id]: int(count)
         for action_id, count in sorted(counts.items())
-        if action_id in ACTION_NAMES
+        if action_id in action_names
     }
 
 

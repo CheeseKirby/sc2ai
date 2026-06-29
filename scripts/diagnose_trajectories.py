@@ -33,6 +33,15 @@ def parse_args() -> argparse.Namespace:
         help="Print per-file summaries after the dataset summary.",
     )
     parser.add_argument(
+        "--kind",
+        choices=["army", "strategy"],
+        default="army",
+        help=(
+            "Trajectory kind to diagnose. army reads action/observation; "
+            "strategy reads strategy_action/strategy_observation."
+        ),
+    )
+    parser.add_argument(
         "--min-action-count",
         type=int,
         default=10,
@@ -47,6 +56,7 @@ def main() -> int:
         args.inputs,
         require_terminal=not args.allow_missing_terminal,
         min_action_count=args.min_action_count,
+        trajectory_kind=args.kind,
     )
     print(format_diagnostics(diagnostics, show_files=args.show_files))
 
@@ -72,7 +82,7 @@ def format_diagnostics(diagnostics, *, show_files: bool = False) -> str:
     ]
     if diagnostics.observation_schema_counts:
         for version, count in diagnostics.observation_schema_counts.items():
-            lines.append(f"  v{version}: {count}")
+            lines.append(f"  {_format_schema_name(version)}: {count}")
     else:
         lines.append("  <none>")
     lines.extend(
@@ -162,6 +172,10 @@ def format_diagnostics(diagnostics, *, show_files: bool = False) -> str:
             )
 
     return "\n".join(lines)
+
+
+def _format_schema_name(version: str) -> str:
+    return f"v{version}" if str(version).isdigit() else str(version)
 
 
 if __name__ == "__main__":

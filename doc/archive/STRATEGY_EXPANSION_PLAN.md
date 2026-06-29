@@ -2,6 +2,8 @@
 
 面向后续 Codex / coding agent 的策略拓展开发计划。
 
+> 当前状态：本文件是策略层从 army-only 扩展到低频宏观 strategy layer 的历史/背景路线。`StrategyPolicy`、`StrategyAction`、`StrategyExecutor`、`strategy_v2`、strategy trajectory、coverage-teacher、strategy imitation、timing/agreement diagnostics 等核心阶段已经完成。当前下一步请优先看 `doc\STRATEGY_OUTCOME_PLAN.md`，AIBuild / TacticSpec 背景见 `doc\TACTIC_POOL_PLAN.md`。
+
 ## 当前边界
 
 当前项目已经具备：
@@ -455,7 +457,7 @@ PPO 第一版仍只做高层动作，不做单位级微操。
 
 ## 给后续 Codex 的提醒
 
-进入该计划前，先确认 `CODEX.md` 和 `STATE.md` 中当前项目状态，然后从阶段 1 开始小步推进：
+进入该计划前，先确认 `doc\CODEX.md` 和 `doc\STATE.md` 中当前项目状态，然后从阶段 1 开始小步推进：
 
 ```text
 每个阶段补 tests 和 diagnostics。

@@ -18,6 +18,7 @@ def test_summarize_records_groups_results() -> None:
             "map_name": "AcropolisLE",
             "difficulty": "Easy",
             "opponent_race": "Protoss",
+            "opponent_ai_build": "Rush",
             "return_code": 0,
             "result": "Result.Victory",
             "duration_seconds": 10.0,
@@ -26,6 +27,7 @@ def test_summarize_records_groups_results() -> None:
             "map_name": "AcropolisLE",
             "difficulty": "Easy",
             "opponent_race": "Protoss",
+            "opponent_ai_build": "Rush",
             "return_code": 0,
             "result": "Result.Defeat",
             "duration_seconds": 20.0,
@@ -34,6 +36,7 @@ def test_summarize_records_groups_results() -> None:
             "map_name": "AcropolisLE",
             "difficulty": "Medium",
             "opponent_race": "Zerg",
+            "opponent_ai_build": "Macro",
             "return_code": 1,
             "result": None,
             "duration_seconds": 5.0,
@@ -42,6 +45,7 @@ def test_summarize_records_groups_results() -> None:
             "map_name": "AcropolisLE",
             "difficulty": "Medium",
             "opponent_race": "Zerg",
+            "opponent_ai_build": "Macro",
             "return_code": 0,
             "result": "Result.Tie",
             "duration_seconds": 15.0,
@@ -54,14 +58,64 @@ def test_summarize_records_groups_results() -> None:
     easy = summaries[0]
     medium = summaries[1]
     assert easy.policy_name == "rule"
+    assert easy.opponent_ai_build == "Rush"
     assert easy.games == 2
     assert easy.victories == 1
     assert easy.defeats == 1
     assert easy.win_rate == 0.5
     assert easy.avg_duration_seconds == 15.0
+    assert medium.opponent_ai_build == "Macro"
     assert medium.no_result == 1
     assert medium.ties == 1
     assert medium.failures == 1
+
+
+@pytest.mark.unit
+def test_summarize_records_groups_by_ai_build_and_defaults_old_rows() -> None:
+    records = [
+        {
+            "policy_name": "rule",
+            "map_name": "AcropolisLE",
+            "difficulty": "Easy",
+            "opponent_race": "Terran",
+            "opponent_ai_build": "Rush",
+            "return_code": 0,
+            "result": "Result.Victory",
+            "duration_seconds": 10.0,
+        },
+        {
+            "policy_name": "rule",
+            "map_name": "AcropolisLE",
+            "difficulty": "Easy",
+            "opponent_race": "Terran",
+            "opponent_ai_build": "Macro",
+            "return_code": 0,
+            "result": "Result.Defeat",
+            "duration_seconds": 20.0,
+        },
+        {
+            "policy_name": "rule",
+            "map_name": "AcropolisLE",
+            "difficulty": "Easy",
+            "opponent_race": "Terran",
+            "return_code": 0,
+            "result": "Result.Tie",
+            "duration_seconds": 30.0,
+        },
+    ]
+
+    summaries = summarize_records(records)
+
+    assert [summary.opponent_ai_build for summary in summaries] == [
+        "Macro",
+        "RandomBuild",
+        "Rush",
+    ]
+    assert {summary.opponent_ai_build: summary.games for summary in summaries} == {
+        "Macro": 1,
+        "RandomBuild": 1,
+        "Rush": 1,
+    }
 
 
 @pytest.mark.unit
@@ -89,6 +143,7 @@ def test_format_summary_table_contains_win_rate() -> None:
                     "map_name": "AcropolisLE",
                     "difficulty": "Easy",
                     "opponent_race": "Protoss",
+                    "opponent_ai_build": "Rush",
                     "return_code": 0,
                     "result": "Result.Victory",
                     "duration_seconds": 10.0,
@@ -99,5 +154,7 @@ def test_format_summary_table_contains_win_rate() -> None:
 
     assert "AcropolisLE" in table
     assert "imitation_v1" in table
+    assert "build" in table
+    assert "Rush" in table
     assert "ties" in table
     assert "100.0%" in table

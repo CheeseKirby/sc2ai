@@ -9,12 +9,16 @@ from pathlib import Path
 from typing import Iterable
 
 
+DEFAULT_AI_BUILD = "RandomBuild"
+
+
 @dataclass(frozen=True)
 class EvalSummary:
     policy_name: str
     map_name: str
     difficulty: str
     opponent_race: str
+    opponent_ai_build: str
     games: int
     victories: int
     defeats: int
@@ -38,19 +42,26 @@ def load_eval_records(paths: Iterable[str | Path]) -> list[dict]:
 
 
 def summarize_records(records: Iterable[dict]) -> list[EvalSummary]:
-    """Aggregate eval records by map/difficulty/opponent."""
-    groups: dict[tuple[str, str, str, str], list[dict]] = defaultdict(list)
+    """Aggregate eval records by map/difficulty/opponent/build."""
+    groups: dict[tuple[str, str, str, str, str], list[dict]] = defaultdict(list)
     for record in records:
         key = (
             str(record.get("policy_name", "rule")),
             str(record.get("map_name", "")),
             str(record.get("difficulty", "")),
             str(record.get("opponent_race", "")),
+            str(record.get("opponent_ai_build") or DEFAULT_AI_BUILD),
         )
         groups[key].append(record)
 
     summaries: list[EvalSummary] = []
-    for (policy_name, map_name, difficulty, opponent_race), rows in sorted(
+    for (
+        policy_name,
+        map_name,
+        difficulty,
+        opponent_race,
+        opponent_ai_build,
+    ), rows in sorted(
         groups.items()
     ):
         games = len(rows)
@@ -66,6 +77,7 @@ def summarize_records(records: Iterable[dict]) -> list[EvalSummary]:
                 map_name=map_name,
                 difficulty=difficulty,
                 opponent_race=opponent_race,
+                opponent_ai_build=opponent_ai_build,
                 games=games,
                 victories=victories,
                 defeats=defeats,
@@ -86,6 +98,7 @@ def format_summary_table(summaries: list[EvalSummary]) -> str:
         "map",
         "difficulty",
         "opponent",
+        "build",
         "games",
         "wins",
         "losses",
@@ -101,6 +114,7 @@ def format_summary_table(summaries: list[EvalSummary]) -> str:
             summary.map_name,
             summary.difficulty,
             summary.opponent_race,
+            summary.opponent_ai_build,
             str(summary.games),
             str(summary.victories),
             str(summary.defeats),

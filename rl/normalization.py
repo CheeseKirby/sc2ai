@@ -17,7 +17,7 @@ class ObservationNormalizer:
     mean: np.ndarray
     std: np.ndarray
     fields: tuple[str, ...] = OBSERVATION_FIELDS
-    schema_version: int = OBSERVATION_SCHEMA_VERSION
+    schema_version: int | str = OBSERVATION_SCHEMA_VERSION
     epsilon: float = 1e-6
 
     def transform(self, observations: np.ndarray) -> np.ndarray:
@@ -40,16 +40,26 @@ class ObservationNormalizer:
         }
 
     @classmethod
-    def from_dict(cls, payload: dict) -> ObservationNormalizer:
+    def from_dict(
+        cls,
+        payload: dict,
+        *,
+        expected_fields: tuple[str, ...] = OBSERVATION_FIELDS,
+        expected_schema_version: int | str = OBSERVATION_SCHEMA_VERSION,
+    ) -> ObservationNormalizer:
         """Rebuild a normalizer from metadata."""
         fields = tuple(payload["fields"])
-        if fields != OBSERVATION_FIELDS:
+        if fields != expected_fields:
             raise ValueError("Normalizer observation fields do not match current schema")
-        schema_version = int(payload["schema_version"])
-        if schema_version != OBSERVATION_SCHEMA_VERSION:
+        schema_version = payload["schema_version"]
+        if isinstance(expected_schema_version, int):
+            schema_version = int(schema_version)
+        else:
+            schema_version = str(schema_version)
+        if schema_version != expected_schema_version:
             raise ValueError(
                 "Normalizer schema version mismatch: "
-                f"{schema_version} != {OBSERVATION_SCHEMA_VERSION}"
+                f"{schema_version} != {expected_schema_version}"
             )
         return cls(
             mean=np.asarray(payload["mean"], dtype=np.float32),
@@ -77,6 +87,8 @@ def fit_observation_normalizer(
     observations: np.ndarray,
     *,
     epsilon: float = 1e-6,
+    fields: tuple[str, ...] = OBSERVATION_FIELDS,
+    schema_version: int | str = OBSERVATION_SCHEMA_VERSION,
 ) -> ObservationNormalizer:
     """Fit mean/std stats from a 2D observation matrix."""
     array = np.asarray(observations, dtype=np.float32)
@@ -84,12 +96,17 @@ def fit_observation_normalizer(
         raise ValueError("Expected a 2D observation matrix")
     if array.shape[0] == 0:
         raise ValueError("Cannot fit normalizer on an empty observation matrix")
-    if array.shape[1] != len(OBSERVATION_FIELDS):
+    if array.shape[1] != len(fields):
         raise ValueError(
-            f"Observation dim mismatch: {array.shape[1]} != {len(OBSERVATION_FIELDS)}"
+            f"Observation dim mismatch: {array.shape[1]} != {len(fields)}"
         )
     mean = array.mean(axis=0)
     std = array.std(axis=0)
     std = np.where(std < epsilon, 1.0, std).astype(np.float32)
-    return ObservationNormalizer(mean=mean.astype(np.float32), std=std, epsilon=epsilon)
-
+    return ObservationNormalizer(
+        mean=mean.astype(np.float32),
+        std=std,
+        fields=fields,
+        schema_version=schema_version,
+        epsilon=epsilon,
+    )

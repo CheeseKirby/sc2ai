@@ -21,7 +21,9 @@ from rl.observations import (
     observation_dict_to_vector,
     validate_observation_dict,
 )
+from rl.strategy_observations import STRATEGY_OBSERVATION_DETAIL_FIELDS
 from rl.trajectory_recorder import JsonlTrajectoryRecorder, TrajectoryStep
+from rl.trajectory_recorder import StrategyTrajectoryStep
 
 
 @dataclass(frozen=True)
@@ -228,6 +230,7 @@ def test_jsonl_trajectory_recorder_writes_one_record(tmp_path) -> None:
         action=1,
         action_name="ATTACK_MAIN",
         reward=0.5,
+        opponent_ai_build="Rush",
     )
 
     with JsonlTrajectoryRecorder(output) as recorder:
@@ -247,5 +250,81 @@ def test_jsonl_trajectory_recorder_writes_one_record(tmp_path) -> None:
             "reward": 0.5,
             "done": False,
             "result": None,
+            "opponent_ai_build": "Rush",
         }
     ]
+
+
+@pytest.mark.unit
+def test_jsonl_trajectory_recorder_writes_strategy_record(tmp_path) -> None:
+    output = tmp_path / "strategy.jsonl"
+    strategy_observation_details = {
+        "ready_photon_cannons": 1.0,
+        "pending_photon_cannons": 0.0,
+        "ready_shield_batteries": 2.0,
+        "pending_shield_batteries": 1.0,
+    }
+    assert tuple(strategy_observation_details) == STRATEGY_OBSERVATION_DETAIL_FIELDS
+    step = StrategyTrajectoryStep(
+        episode_id="episode-1",
+        step=64,
+        map_name="AcropolisLE",
+        difficulty="Easy",
+        opponent_race="Protoss",
+        strategy_observation={"own_bases": 1.0},
+        strategy_observation_details=strategy_observation_details,
+        strategy_action=3,
+        strategy_action_name="TECH_ROBO",
+        strategy_policy_source="coverage-teacher",
+        strategy_policy_reason="base_threat_static_defense_gap",
+        army_observation={"army_count": 12.0},
+        army_action=1,
+        army_action_name="ATTACK_MAIN",
+        reward=0.25,
+        opponent_ai_build="Air",
+    )
+
+    with JsonlTrajectoryRecorder(output) as recorder:
+        recorder.record(step)
+
+    rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+    assert rows == [
+        {
+            "episode_id": "episode-1",
+            "step": 64,
+            "map_name": "AcropolisLE",
+            "difficulty": "Easy",
+            "opponent_race": "Protoss",
+            "strategy_observation": {"own_bases": 1.0},
+            "strategy_observation_details": strategy_observation_details,
+            "strategy_action": 3,
+            "strategy_action_name": "TECH_ROBO",
+            "strategy_policy_source": "coverage-teacher",
+            "strategy_policy_reason": "base_threat_static_defense_gap",
+            "army_observation": {"army_count": 12.0},
+            "army_action": 1,
+            "army_action_name": "ATTACK_MAIN",
+            "reward": 0.25,
+            "done": False,
+            "result": None,
+            "opponent_ai_build": "Air",
+            "tactic_id": None,
+            "tactic_phase": None,
+            "tactic_source": None,
+            "tactic_started_game_time": None,
+            "tactic_switch_reason": None,
+            "tactic_previous_id": None,
+            "strategy_action_before_tactic_filter": None,
+            "strategy_action_before_tactic_filter_name": None,
+            "strategy_action_after_tactic_filter": None,
+            "strategy_action_after_tactic_filter_name": None,
+            "strategy_execution_attempted": None,
+            "strategy_execution_effect": None,
+            "strategy_execution_blocker": None,
+            "strategy_execution_unit_type": None,
+            "strategy_execution_target": None,
+        }
+    ]
+    assert tuple(rows[0]["strategy_observation_details"]) == (
+        STRATEGY_OBSERVATION_DETAIL_FIELDS
+    )

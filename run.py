@@ -25,14 +25,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # Must import bot.config FIRST to set SC2PATH before sc2.* imports
 from bot.config import DEFAULT_MAP, AVAILABLE_MAPS  # noqa: E402
 from bot.managers.coverage_army_policy import CoverageArmyPolicy  # noqa: E402
+from bot.managers.coverage_strategy_policy import CoverageStrategyPolicy  # noqa: E402
 from bot.managers.llm_army_policy import LLMArmyPolicy, LLMPolicyConfig  # noqa: E402
 from bot.managers.rl_army_policy import RLArmyPolicy  # noqa: E402
+from bot.managers.rl_strategy_policy import RLStrategyPolicy  # noqa: E402
+from bot.managers.tactic_strategy_policy import TacticAwareStrategyPolicy  # noqa: E402
 from bot.protoss_rule_bot import ProtossRuleBot  # noqa: E402
 from bot.window_hider import hide_target_windows  # noqa: E402
 from rl.trajectory_recorder import JsonlTrajectoryRecorder  # noqa: E402
 
 from sc2 import maps  # noqa: E402
-from sc2.data import Difficulty, Race  # noqa: E402
+from sc2.data import AIBuild, Difficulty, Race  # noqa: E402
 from sc2.main import run_game  # noqa: E402
 from sc2.player import Bot, Computer  # noqa: E402
 
@@ -65,6 +68,15 @@ RACE_MAP: dict[str, Race] = {
     "Random": Race.Random,
 }
 
+AIBUILD_MAP: dict[str, AIBuild] = {
+    "RandomBuild": AIBuild.RandomBuild,
+    "Rush": AIBuild.Rush,
+    "Timing": AIBuild.Timing,
+    "Power": AIBuild.Power,
+    "Macro": AIBuild.Macro,
+    "Air": AIBuild.Air,
+}
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Run ProtossRuleBot vs builtin AI")
@@ -89,6 +101,12 @@ def parse_args() -> argparse.Namespace:
         default="Random",
         choices=list(RACE_MAP.keys()),
         help="Built-in AI race (default: Random)",
+    )
+    p.add_argument(
+        "--ai-build",
+        default="RandomBuild",
+        choices=list(AIBUILD_MAP.keys()),
+        help="Built-in AI build style (default: RandomBuild)",
     )
     p.add_argument(
         "--realtime",
@@ -126,6 +144,26 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Army policy to use when --policy-checkpoint is omitted. "
             "coverage-teacher is for data collection only; llm is experimental."
+        ),
+    )
+    p.add_argument(
+        "--strategy-policy",
+        choices=["rule", "coverage-teacher", "checkpoint"],
+        default="rule",
+        help=(
+            "Low-frequency strategy policy. Defaults to rule no-op. "
+            "coverage-teacher is for strategy data collection only; "
+            "checkpoint loads --strategy-checkpoint."
+        ),
+    )
+    p.add_argument(
+        "--strategy-tactic-mode",
+        choices=["off", "rule"],
+        default="off",
+        help=(
+            "Explicit opt-in tactic filter for strategy policies. "
+            "Currently only rule mode with --strategy-policy coverage-teacher "
+            "is supported. Default: off."
         ),
     )
     p.add_argument(
@@ -168,6 +206,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--strategy-trajectory-path",
+        type=Path,
+        default=None,
+        help=(
+            "Optional JSONL path for low-frequency strategy trajectory records. "
+            "This is separate from --trajectory-path so army imitation data is "
+            "not polluted by strategy rows."
+        ),
+    )
+    p.add_argument(
         "--record-decision-interval",
         type=int,
         default=8,
@@ -189,6 +237,20 @@ def parse_args() -> argparse.Namespace:
         "--policy-device",
         default="cpu",
         help="Torch device for --policy-checkpoint inference (default: cpu).",
+    )
+    p.add_argument(
+        "--strategy-checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Optional strategy policy checkpoint used when "
+            "--strategy-policy checkpoint is selected."
+        ),
+    )
+    p.add_argument(
+        "--strategy-device",
+        default="cpu",
+        help="Torch device for --strategy-checkpoint inference (default: cpu).",
     )
     p.add_argument(
         "--llm-provider",
@@ -312,16 +374,28 @@ def main() -> int:
     )
 
     args = parse_args()
+    if args.strategy_tactic_mode != "off" and args.strategy_policy != "coverage-teacher":
+        raise ValueError(
+            "--strategy-tactic-mode currently requires "
+            "--strategy-policy coverage-teacher"
+        )
 
     logger.info("Map:        %s", args.map)
     logger.info("Bot:        ProtossRuleBot (Protoss)")
-    logger.info("Opponent:   built-in AI (%s, %s)", args.opponent, args.difficulty)
+    logger.info(
+        "Opponent:   built-in AI (%s, %s, %s)",
+        args.opponent,
+        args.difficulty,
+        args.ai_build,
+    )
     logger.info("Mode:       %s", "realtime" if args.realtime else "fastest")
     logger.info("Hide:       %s", "OFF (--show-window)" if args.show_window else "ON")
     if args.game_time_limit is not None:
         logger.info("TimeLimit:  %.1f game seconds", args.game_time_limit)
     if args.trajectory_path is not None:
         logger.info("Trajectory: %s", args.trajectory_path)
+    if args.strategy_trajectory_path is not None:
+        logger.info("StrategyTrajectory: %s", args.strategy_trajectory_path)
     if args.policy_checkpoint is not None:
         logger.info(
             "ArmyPolicy: RLArmyPolicy checkpoint=%s device=%s",
@@ -330,6 +404,14 @@ def main() -> int:
         )
     else:
         logger.info("ArmyPolicy: %s", args.army_policy)
+    logger.info("StrategyPolicy: %s", args.strategy_policy)
+    logger.info("StrategyTacticMode: %s", args.strategy_tactic_mode)
+    if args.strategy_policy == "checkpoint":
+        logger.info(
+            "StrategyCheckpoint: %s device=%s",
+            args.strategy_checkpoint,
+            args.strategy_device,
+        )
     if args.army_policy == "llm" and args.policy_checkpoint is None:
         logger.info(
             "LLM:        provider=%s model=%s base_url=%s interval=%s",
@@ -355,12 +437,19 @@ def main() -> int:
         if args.trajectory_path is not None
         else None
     )
+    strategy_trajectory_recorder = (
+        JsonlTrajectoryRecorder(args.strategy_trajectory_path)
+        if args.strategy_trajectory_path is not None
+        else None
+    )
     bot_ai = ProtossRuleBot(
         trajectory_recorder=trajectory_recorder,
+        strategy_trajectory_recorder=strategy_trajectory_recorder,
         episode_metadata={
             "map_name": args.map,
             "difficulty": args.difficulty,
             "opponent_race": args.opponent,
+            "opponent_ai_build": args.ai_build,
         },
         record_decision_interval=args.record_decision_interval,
     )
@@ -396,13 +485,31 @@ def main() -> int:
                 log_path=args.llm_log_path,
             )
         )
+    if args.strategy_policy == "coverage-teacher":
+        strategy_policy = CoverageStrategyPolicy()
+        if args.strategy_tactic_mode == "rule":
+            strategy_policy = TacticAwareStrategyPolicy(strategy_policy)
+        bot_ai.strategy_policy = strategy_policy
+    elif args.strategy_policy == "checkpoint":
+        if args.strategy_checkpoint is None:
+            raise ValueError(
+                "--strategy-policy checkpoint requires --strategy-checkpoint"
+            )
+        bot_ai.strategy_policy = RLStrategyPolicy(
+            args.strategy_checkpoint,
+            device=args.strategy_device,
+        )
 
     try:
         result = run_game(
             map_settings=maps.get(args.map),
             players=[
                 Bot(Race.Protoss, bot_ai),
-                Computer(RACE_MAP[args.opponent], DIFFICULTY_MAP[args.difficulty]),
+                Computer(
+                    RACE_MAP[args.opponent],
+                    DIFFICULTY_MAP[args.difficulty],
+                    ai_build=AIBUILD_MAP[args.ai_build],
+                ),
             ],
             realtime=args.realtime,
             game_time_limit=args.game_time_limit,
@@ -413,6 +520,8 @@ def main() -> int:
             watcher.join(timeout=1.0)
         if trajectory_recorder is not None:
             trajectory_recorder.close()
+        if strategy_trajectory_recorder is not None:
+            strategy_trajectory_recorder.close()
         # One last sweep, in case SC2 left an exit dialog open
         if not args.show_window:
             try:

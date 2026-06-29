@@ -31,6 +31,7 @@ SAFE_LAUNCH = PROJECT_ROOT / "scripts" / "safe_launch.py"
 
 RESULT_RE = re.compile(r"=== Game result:\s*(Result\.\w+)\s*===")
 FALLBACK_RESULT_RE = re.compile(r"Game ended\. Result = (Result\.\w+)")
+AI_BUILDS = ("RandomBuild", "Rush", "Timing", "Power", "Macro", "Air")
 
 
 @dataclass(frozen=True)
@@ -38,14 +39,19 @@ class EvalRecord:
     policy_name: str
     policy_type: str
     policy_checkpoint: str | None
+    strategy_policy: str
+    strategy_tactic_mode: str
+    strategy_checkpoint: str | None
     map_name: str
     difficulty: str
     opponent_race: str
+    opponent_ai_build: str
     game_index: int
     return_code: int
     result: str | None
     duration_seconds: float
     trajectory_path: str | None
+    strategy_trajectory_path: str | None
 
 
 def parse_result(output: str) -> str | None:
@@ -80,6 +86,13 @@ def parse_args() -> argparse.Namespace:
         help="Opponent races to evaluate.",
     )
     parser.add_argument(
+        "--ai-builds",
+        nargs="+",
+        choices=AI_BUILDS,
+        default=["RandomBuild"],
+        help="Built-in AI build styles to evaluate.",
+    )
+    parser.add_argument(
         "--games-per-combo",
         type=int,
         default=5,
@@ -96,6 +109,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Optional directory for per-game trajectory JSONL files.",
+    )
+    parser.add_argument(
+        "--strategy-trajectory-dir",
+        type=Path,
+        default=None,
+        help="Optional directory for per-game strategy trajectory JSONL files.",
     )
     parser.add_argument(
         "--run-root",
@@ -158,6 +177,25 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--strategy-policy",
+        choices=["rule", "coverage-teacher", "checkpoint"],
+        default="rule",
+        help=(
+            "Strategy policy forwarded to run.py. Defaults to rule no-op. "
+            "coverage-teacher is for strategy data collection only; "
+            "checkpoint forwards --strategy-checkpoint."
+        ),
+    )
+    parser.add_argument(
+        "--strategy-tactic-mode",
+        choices=["off", "rule"],
+        default="off",
+        help=(
+            "Explicit opt-in tactic filter forwarded to run.py. "
+            "Default off preserves current strategy behavior."
+        ),
+    )
+    parser.add_argument(
         "--army-attack-threshold",
         type=int,
         default=None,
@@ -202,6 +240,20 @@ def parse_args() -> argparse.Namespace:
         "--policy-device",
         default="cpu",
         help="Torch device forwarded to run.py --policy-device.",
+    )
+    parser.add_argument(
+        "--strategy-checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Optional strategy checkpoint forwarded to run.py "
+            "--strategy-checkpoint when --strategy-policy checkpoint."
+        ),
+    )
+    parser.add_argument(
+        "--strategy-device",
+        default="cpu",
+        help="Torch device forwarded to run.py --strategy-device.",
     )
     parser.add_argument(
         "--llm-provider",
@@ -285,6 +337,7 @@ def main() -> int:
         len(args.maps)
         * len(args.difficulties)
         * len(args.opponents)
+        * len(args.ai_builds)
         * args.games_per_combo
     )
     completed = 0
@@ -295,56 +348,68 @@ def main() -> int:
         for map_name in args.maps:
             for difficulty in args.difficulties:
                 for opponent_race in args.opponents:
-                    for game_index in range(1, args.games_per_combo + 1):
-                        completed += 1
-                        print(
-                            f"[{completed}/{total}] {map_name} "
-                            f"{difficulty} vs {opponent_race} game {game_index}"
-                        )
-                        record = run_one_game(
-                            map_name=map_name,
-                            difficulty=difficulty,
-                            opponent_race=opponent_race,
-                            game_index=game_index,
-                            trajectory_dir=args.trajectory_dir,
-                            record_decision_interval=args.record_decision_interval,
-                            guard_interval=args.guard_interval,
-                            hide_watch_seconds=args.hide_watch_seconds,
-                            hide_watch_interval=args.hide_watch_interval,
-                            game_time_limit=args.game_time_limit,
-                            army_policy=args.army_policy,
-                            army_attack_threshold=args.army_attack_threshold,
-                            army_retreat_threshold=args.army_retreat_threshold,
-                            retreat_peak_loss_ratio=args.retreat_peak_loss_ratio,
-                            retreat_min_peak_army=args.retreat_min_peak_army,
-                            retreat_min_lost_from_peak=(
-                                args.retreat_min_lost_from_peak
-                            ),
-                            policy_name=policy_name(args),
-                            policy_checkpoint=args.policy_checkpoint,
-                            policy_device=args.policy_device,
-                            llm_provider=args.llm_provider,
-                            llm_model=args.llm_model,
-                            llm_base_url=args.llm_base_url,
-                            llm_api_key_env=args.llm_api_key_env,
-                            llm_timeout=args.llm_timeout,
-                            llm_decision_interval=args.llm_decision_interval,
-                            llm_temperature=args.llm_temperature,
-                            llm_max_output_tokens=args.llm_max_output_tokens,
-                            llm_allow_no_api_key=args.llm_allow_no_api_key,
-                            llm_log_dir=args.llm_log_dir,
-                        )
-                        record_dict = asdict(record)
-                        records.append(record_dict)
-                        if record.return_code != 0:
-                            failures += 1
-                        out.write(json.dumps(record_dict, ensure_ascii=False) + "\n")
-                        out.flush()
-                        print(
-                            f"  -> {record.result or 'NO_RESULT'} "
-                            f"code={record.return_code} "
-                            f"duration={record.duration_seconds:.1f}s"
-                        )
+                    for opponent_ai_build in args.ai_builds:
+                        for game_index in range(1, args.games_per_combo + 1):
+                            completed += 1
+                            print(
+                                f"[{completed}/{total}] {map_name} "
+                                f"{difficulty} vs {opponent_race} "
+                                f"{opponent_ai_build} game {game_index}"
+                            )
+                            record = run_one_game(
+                                map_name=map_name,
+                                difficulty=difficulty,
+                                opponent_race=opponent_race,
+                                opponent_ai_build=opponent_ai_build,
+                                game_index=game_index,
+                                trajectory_dir=trajectory_dir,
+                                strategy_trajectory_dir=args.strategy_trajectory_dir,
+                                record_decision_interval=(
+                                    args.record_decision_interval
+                                ),
+                                guard_interval=args.guard_interval,
+                                hide_watch_seconds=args.hide_watch_seconds,
+                                hide_watch_interval=args.hide_watch_interval,
+                                game_time_limit=args.game_time_limit,
+                                army_policy=args.army_policy,
+                                strategy_policy=args.strategy_policy,
+                                strategy_tactic_mode=args.strategy_tactic_mode,
+                                army_attack_threshold=args.army_attack_threshold,
+                                army_retreat_threshold=args.army_retreat_threshold,
+                                retreat_peak_loss_ratio=args.retreat_peak_loss_ratio,
+                                retreat_min_peak_army=args.retreat_min_peak_army,
+                                retreat_min_lost_from_peak=(
+                                    args.retreat_min_lost_from_peak
+                                ),
+                                policy_name=policy_name(args),
+                                policy_checkpoint=args.policy_checkpoint,
+                                policy_device=args.policy_device,
+                                strategy_checkpoint=args.strategy_checkpoint,
+                                strategy_device=args.strategy_device,
+                                llm_provider=args.llm_provider,
+                                llm_model=args.llm_model,
+                                llm_base_url=args.llm_base_url,
+                                llm_api_key_env=args.llm_api_key_env,
+                                llm_timeout=args.llm_timeout,
+                                llm_decision_interval=args.llm_decision_interval,
+                                llm_temperature=args.llm_temperature,
+                                llm_max_output_tokens=args.llm_max_output_tokens,
+                                llm_allow_no_api_key=args.llm_allow_no_api_key,
+                                llm_log_dir=args.llm_log_dir,
+                            )
+                            record_dict = asdict(record)
+                            records.append(record_dict)
+                            if record.return_code != 0:
+                                failures += 1
+                            out.write(
+                                json.dumps(record_dict, ensure_ascii=False) + "\n"
+                            )
+                            out.flush()
+                            print(
+                                f"  -> {record.result or 'NO_RESULT'} "
+                                f"code={record.return_code} "
+                                f"duration={record.duration_seconds:.1f}s"
+                            )
 
     print(f"Evaluation written to {output}")
     if experiment is not None:
@@ -367,6 +432,7 @@ def make_eval_config(args: argparse.Namespace) -> dict:
         "maps": list(args.maps),
         "difficulties": list(args.difficulties),
         "opponents": list(args.opponents),
+        "ai_builds": list(args.ai_builds),
         "games_per_combo": int(args.games_per_combo),
         "record_decision_interval": int(args.record_decision_interval),
         "guard_interval": float(args.guard_interval),
@@ -376,6 +442,8 @@ def make_eval_config(args: argparse.Namespace) -> dict:
             float(args.game_time_limit) if args.game_time_limit is not None else None
         ),
         "army_policy": args.army_policy,
+        "strategy_policy": args.strategy_policy,
+        "strategy_tactic_mode": args.strategy_tactic_mode,
         "army_attack_threshold": args.army_attack_threshold,
         "army_retreat_threshold": args.army_retreat_threshold,
         "retreat_peak_loss_ratio": args.retreat_peak_loss_ratio,
@@ -386,7 +454,18 @@ def make_eval_config(args: argparse.Namespace) -> dict:
             str(args.policy_checkpoint) if args.policy_checkpoint is not None else None
         ),
         "policy_device": args.policy_device,
+        "strategy_checkpoint": (
+            str(args.strategy_checkpoint)
+            if args.strategy_checkpoint is not None
+            else None
+        ),
+        "strategy_device": args.strategy_device,
         "trajectory_dir": str(args.trajectory_dir) if args.trajectory_dir else None,
+        "strategy_trajectory_dir": (
+            str(args.strategy_trajectory_dir)
+            if args.strategy_trajectory_dir
+            else None
+        ),
     }
     if args.army_policy == "llm":
         config.update(
@@ -430,6 +509,8 @@ def policy_name(args: argparse.Namespace) -> str:
         return str(args.policy_name)
     if args.policy_checkpoint is not None:
         return Path(args.policy_checkpoint).stem
+    if getattr(args, "strategy_checkpoint", None) is not None:
+        return Path(args.strategy_checkpoint).stem
     if getattr(args, "army_policy", None) == "llm":
         model = getattr(args, "llm_model", None)
         return f"llm-{model}" if model else "llm"
@@ -441,14 +522,18 @@ def run_one_game(
     map_name: str,
     difficulty: str,
     opponent_race: str,
+    opponent_ai_build: str,
     game_index: int,
     trajectory_dir: Path | None,
+    strategy_trajectory_dir: Path | None,
     record_decision_interval: int,
     guard_interval: float,
     hide_watch_seconds: float,
     hide_watch_interval: float,
     game_time_limit: float | None,
     army_policy: str,
+    strategy_policy: str,
+    strategy_tactic_mode: str,
     army_attack_threshold: int | None,
     army_retreat_threshold: int | None,
     retreat_peak_loss_ratio: float | None,
@@ -457,6 +542,8 @@ def run_one_game(
     policy_name: str,
     policy_checkpoint: Path | None,
     policy_device: str,
+    strategy_checkpoint: Path | None,
+    strategy_device: str,
     llm_provider: str | None,
     llm_model: str | None,
     llm_base_url: str | None,
@@ -469,10 +556,28 @@ def run_one_game(
     llm_log_dir: Path | None,
 ) -> EvalRecord:
     trajectory_path = _trajectory_path(
-        trajectory_dir, map_name, difficulty, opponent_race, game_index
+        trajectory_dir,
+        map_name,
+        difficulty,
+        opponent_race,
+        opponent_ai_build,
+        game_index,
+    )
+    strategy_trajectory_path = _trajectory_path(
+        strategy_trajectory_dir,
+        map_name,
+        difficulty,
+        opponent_race,
+        opponent_ai_build,
+        game_index,
     )
     llm_log_path = _llm_log_path(
-        llm_log_dir, map_name, difficulty, opponent_race, game_index
+        llm_log_dir,
+        map_name,
+        difficulty,
+        opponent_race,
+        opponent_ai_build,
+        game_index,
     )
     command = [
         str(PYTHON if PYTHON.exists() else Path(sys.executable)),
@@ -487,11 +592,30 @@ def run_one_game(
         difficulty,
         "--opponent",
         opponent_race,
+        "--ai-build",
+        opponent_ai_build,
         "--hide-watch-seconds",
         str(hide_watch_seconds),
         "--hide-watch-interval",
         str(hide_watch_interval),
+        "--strategy-policy",
+        strategy_policy,
     ]
+    if strategy_tactic_mode != "off":
+        command.extend(["--strategy-tactic-mode", strategy_tactic_mode])
+    if strategy_policy == "checkpoint":
+        if strategy_checkpoint is None:
+            raise ValueError(
+                "strategy_policy='checkpoint' requires strategy_checkpoint"
+            )
+        command.extend(
+            [
+                "--strategy-checkpoint",
+                str(strategy_checkpoint),
+                "--strategy-device",
+                strategy_device,
+            ]
+        )
     if game_time_limit is not None:
         command.extend(["--game-time-limit", str(game_time_limit)])
     if policy_checkpoint is not None:
@@ -547,6 +671,13 @@ def run_one_game(
                 str(record_decision_interval),
             ]
         )
+    if strategy_trajectory_path is not None:
+        command.extend(
+            [
+                "--strategy-trajectory-path",
+                str(strategy_trajectory_path),
+            ]
+        )
 
     started = time.monotonic()
     proc = subprocess.run(
@@ -563,14 +694,23 @@ def run_one_game(
         policy_name=policy_name,
         policy_type="checkpoint" if policy_checkpoint is not None else army_policy,
         policy_checkpoint=str(policy_checkpoint) if policy_checkpoint else None,
+        strategy_policy=strategy_policy,
+        strategy_tactic_mode=strategy_tactic_mode,
+        strategy_checkpoint=(
+            str(strategy_checkpoint) if strategy_checkpoint is not None else None
+        ),
         map_name=map_name,
         difficulty=difficulty,
         opponent_race=opponent_race,
+        opponent_ai_build=opponent_ai_build,
         game_index=game_index,
         return_code=proc.returncode,
         result=parse_result(proc.stdout),
         duration_seconds=duration,
         trajectory_path=str(trajectory_path) if trajectory_path else None,
+        strategy_trajectory_path=(
+            str(strategy_trajectory_path) if strategy_trajectory_path else None
+        ),
     )
 
 
@@ -584,13 +724,15 @@ def _trajectory_path(
     map_name: str,
     difficulty: str,
     opponent_race: str,
+    opponent_ai_build: str,
     game_index: int,
 ) -> Path | None:
     if trajectory_dir is None:
         return None
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = (
-        f"{stamp}_{map_name}_{difficulty}_{opponent_race}_{game_index:03d}.jsonl"
+        f"{stamp}_{map_name}_{difficulty}_{opponent_race}_"
+        f"{opponent_ai_build}_{game_index:03d}.jsonl"
     )
     return trajectory_dir / filename
 
@@ -600,12 +742,16 @@ def _llm_log_path(
     map_name: str,
     difficulty: str,
     opponent_race: str,
+    opponent_ai_build: str,
     game_index: int,
 ) -> Path | None:
     if llm_log_dir is None:
         return None
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{stamp}_{map_name}_{difficulty}_{opponent_race}_{game_index:03d}.jsonl"
+    filename = (
+        f"{stamp}_{map_name}_{difficulty}_{opponent_race}_"
+        f"{opponent_ai_build}_{game_index:03d}.jsonl"
+    )
     return llm_log_dir / filename
 
 
