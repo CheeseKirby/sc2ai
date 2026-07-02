@@ -37,9 +37,13 @@ SAFE_TRAINING_USES = frozenset(
 CONSERVATIVE_SAFE_TRAINING_USES = frozenset({"accept_positive"})
 OUTCOME_CONSERVATIVE_SAFE_TRAINING_USES = frozenset({"accept_positive"})
 UNSAFE_TRAINING_USES = frozenset({"drop_non_executable", "veto_negative"})
+ACTION_SPACE_AWARE_UNSAFE_TRAINING_USES = frozenset(
+    {"drop_non_executable", "veto_negative", "action_space_exhausted"}
+)
 OUTCOME_CONSERVATIVE_UNSAFE_TRAINING_USES = frozenset({"veto_negative"})
 ACTION_CRITIC_LABEL_POLICIES: tuple[str, ...] = (
     "trainable",
+    "trainable-action-space",
     "conservative",
     "outcome-conservative",
 )
@@ -857,9 +861,14 @@ def _label_for_training_use(training_use: str, *, label_policy: str) -> int | No
         if label_policy == "conservative"
         else SAFE_TRAINING_USES
     )
+    unsafe_uses = (
+        ACTION_SPACE_AWARE_UNSAFE_TRAINING_USES
+        if label_policy == "trainable-action-space"
+        else UNSAFE_TRAINING_USES
+    )
     if training_use in safe_uses:
         return SAFE_LABEL
-    if training_use in UNSAFE_TRAINING_USES:
+    if training_use in unsafe_uses:
         return UNSAFE_LABEL
     return None
 

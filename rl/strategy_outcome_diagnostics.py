@@ -166,6 +166,7 @@ class _StrategyOutcomeRow:
     result: str | None
     observation: dict[str, float]
     observation_details: dict[str, float]
+    army_observation: dict[str, float]
     map_name: str
     difficulty: str
     opponent_race: str
@@ -549,6 +550,7 @@ def _iter_valid_strategy_rows(path: Path, *, source: str) -> Iterable[_StrategyO
                 result=_optional_str(row.get("result")),
                 observation=normalized,
                 observation_details=_row_observation_details(row),
+                army_observation=_row_army_observation(row),
                 map_name=str(row.get("map_name", "")),
                 difficulty=str(row.get("difficulty", "")),
                 opponent_race=str(row.get("opponent_race", "")),
@@ -992,12 +994,20 @@ def _row_observation(row: dict[str, Any]) -> Any:
 
 def _row_observation_details(row: dict[str, Any]) -> dict[str, float]:
     details = row.get("strategy_observation_details")
-    if not isinstance(details, dict):
+    return _numeric_dict(details)
+
+
+def _row_army_observation(row: dict[str, Any]) -> dict[str, float]:
+    return _numeric_dict(row.get("army_observation"))
+
+
+def _numeric_dict(value: Any) -> dict[str, float]:
+    if not isinstance(value, dict):
         return {}
     normalized: dict[str, float] = {}
-    for key, value in details.items():
+    for key, item in value.items():
         try:
-            normalized[str(key)] = float(value)
+            normalized[str(key)] = float(item)
         except (TypeError, ValueError):
             continue
     return normalized

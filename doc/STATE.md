@@ -6,7 +6,7 @@ Compact current state and experiment ledger.
 
 - Project root: `D:\opus\data\raw\alpaca-gpt4\sc2\sc2-ai-bot`
 - This folder is a git repository; the worktree may be dirty from ongoing feature work, so avoid destructive git operations.
-- Latest recorded tests: `.\.venv\Scripts\python.exe -m pytest -q` -> `209 passed`.
+- Latest recorded tests: `.\.venv\Scripts\python.exe -m pytest -q` -> `370 passed`.
 - Latest recorded environment check: `.\.venv\Scripts\python.exe scripts\check_env.py` -> OK.
 - SC2 client: NetEase/China `5.0.15.96999`, `Base96999`.
 - SC2 launches must use hidden-window guard and `scripts/evaluate.py` / `scripts/safe_launch.py`.
@@ -15,7 +15,599 @@ Compact current state and experiment ledger.
 - Default runtime remains rule/no-op unless a policy is explicitly selected.
 - Current AIBuild status: official built-in AI `AIBuild` is wired into `run.py`, `scripts/evaluate.py`, eval summaries, experiment config, and army/strategy trajectory metadata.
 - Current tactic status: first `TacticSpec` / `TacticState` / `RuleTacticSelector` skeleton is implemented and available only through explicit opt-in `--strategy-policy coverage-teacher --strategy-tactic-mode rule`; tactic-rule runtime is frozen and not promotable on current evidence.
-- Current next plan: follow `doc\DEVELOPMENT_PLAN.md`; strategy execution observability, candidate audit, and replay-only runtime-patch gates are implemented. The frozen anti-air ready-static candidate failed both gates, so do not patch runtime from it.
+- Current strategy-teacher recovery profile: `--strategy-policy coverage-teacher --strategy-teacher-profile pre-collapse-recovery` is available for targeted teacher data collection only. It adds bounded, explainable labels for late high-vespene/no-robo `TECH_ROBO` windows and late low-static-defense `BUILD_STATIC_DEFENSE` windows. The default teacher profile remains `standard`, and the default runtime remains rule/off.
+- Current next plan: follow `doc\DEVELOPMENT_PLAN.md`; the fresh strategy metadata/training loop is working, ambiguous-row capped training prevents pure STAY_COURSE training-set dominance, and executor-aligned replay/runtime checks support the action-critic mask. A focused anti-air recovery teacher batch produced useful Photon Cannon / recovery evidence, and the pre-collapse recovery teacher profile successfully collected targeted Thunderbird/Acropolis Hard Terran Power recovery-window data. The checkpoint-level pre-collapse recovery audit now identifies the current blocker more precisely: current candidates can predict some recovery before collapse, but they still miss most recovery `accept_positive` labels, especially `BUILD_STATIC_DEFENSE`. Global, action-specific, and context-aware recovery accept-positive ablations are implemented, and the recovery context slice audit now quantifies action confusion on matched recovery contexts. All current candidates remain hold-only. Do not promote strategy checkpoints, do not promote critics, do not run PPO, and do not change default runtime yet.
+
+## Latest Iteration: Recovery Context Slice Audit
+
+Implementation:
+
+```text
+rl\strategy_recovery_context_audit.py
+scripts\audit_strategy_recovery_context.py
+tests\test_strategy_recovery_context_audit.py
+rl\strategy_filtered_datasets.py
+```
+
+Purpose:
+
+```text
+Audit only observed accept_positive recovery rows.
+Split them by whether the recorded recovery action matches the opt-in
+pre-collapse-recovery context filter.
+Report action-level confusion so TECH_ROBO, PRODUCE_ARMY, and
+BUILD_STATIC_DEFENSE mistakes are visible separately.
+Warn when a surface has no context-matched positive rows, so an apparently ready
+context gate is not mistaken for evidence.
+```
+
+Commands used:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\audit_strategy_recovery_context.py <inputs> --checkpoint <policy.pt> --prediction-mode executable-mask --json-output <artifact>.json --text-output <artifact>.txt
+```
+
+Artifacts:
+
+```text
+runs\20260702_153843_20260702_strategy_imitation_context_recovery_static_w4_tech_w4_cap2_v1\artifacts\recovery_context_combined.json
+runs\20260702_153843_20260702_strategy_imitation_context_recovery_static_w4_tech_w4_cap2_v1\artifacts\recovery_context_online_smoke_v2.json
+
+runs\20260702_154310_20260702_strategy_imitation_context_recovery_x3_static_w4_tech_w4_cap2_v1\artifacts\recovery_context_combined.json
+runs\20260702_154310_20260702_strategy_imitation_context_recovery_x3_static_w4_tech_w4_cap2_v1\artifacts\recovery_context_online_smoke_v2.json
+
+runs\20260702_154218_20260702_strategy_imitation_context_recovery_x10_static_w4_tech_w4_cap2_v1\artifacts\recovery_context_combined.json
+runs\20260702_154218_20260702_strategy_imitation_context_recovery_x10_static_w4_tech_w4_cap2_v1\artifacts\recovery_context_online_smoke_v2.json
+```
+
+Combined fresh + threat + anti-air + pre-collapse recovery surface:
+
+```text
+context-only:
+  accept_positive_recovery_match: 16/54
+  context_matched_accept_positive_recovery_match: 2/5
+  context_missed_accept_positive_recovery_rows: 3/5
+  context_matched_cross_action_confusion_rows: 2/5
+  context_matched_confusion:
+    BUILD_STATIC_DEFENSE -> BUILD_STATIC_DEFENSE: 2
+    PRODUCE_ARMY -> BUILD_STATIC_DEFENSE: 1
+    PRODUCE_ARMY -> STAY_COURSE: 1
+    TECH_ROBO -> BUILD_STATIC_DEFENSE: 1
+
+context x3:
+  accept_positive_recovery_match: 19/54
+  context_matched_accept_positive_recovery_match: 2/5
+  context_missed_accept_positive_recovery_rows: 3/5
+  context_matched_cross_action_confusion_rows: 3/5
+  context_matched_confusion:
+    BUILD_STATIC_DEFENSE -> BUILD_STATIC_DEFENSE: 2
+    PRODUCE_ARMY -> BUILD_STATIC_DEFENSE: 2
+    TECH_ROBO -> BUILD_STATIC_DEFENSE: 1
+
+context x10:
+  accept_positive_recovery_match: 12/54
+  context_matched_accept_positive_recovery_match: 4/5
+  context_missed_accept_positive_recovery_rows: 1/5
+  context_matched_cross_action_confusion_rows: 1/5
+  context_matched_confusion:
+    BUILD_STATIC_DEFENSE -> BUILD_STATIC_DEFENSE: 2
+    PRODUCE_ARMY -> BUILD_STATIC_DEFENSE: 1
+    PRODUCE_ARMY -> PRODUCE_ARMY: 1
+    TECH_ROBO -> TECH_ROBO: 1
+```
+
+Online-smoke-v2 regression surface:
+
+```text
+all three context-aware candidates:
+  context_matched_accept_positive_recovery_rows: 0
+  warning: no_context_matched_accept_positive_recovery_rows
+
+This surface still matters for veto/action-space regressions, but it does not
+prove the pre-collapse recovery context slice because its recovery accept-
+positive rows do not match that context filter.
+```
+
+Decision:
+
+```text
+Do not promote any context-aware checkpoint.
+Do not run online smoke from these candidates.
+Do not change default runtime.
+
+The new audit confirms that current data is too sparse for context oversampling
+to be reliable: only 5 combined recovery accept-positive rows match the
+pre-collapse-recovery context filter. x10 is the first candidate to match the
+late TECH_ROBO context row and both static-defense context rows, but it still
+turns one matched PRODUCE_ARMY row into BUILD_STATIC_DEFENSE, has worse overall
+accept-positive recovery preservation, and already regressed the combined
+pre-collapse recovery gate.
+
+Next training progress should add or construct more matched context-positive
+rows and then require zero context-matched cross-action confusion before any
+online checkpoint smoke.
+```
+
+## Previous Iteration: Context-Aware Recovery Preservation
+
+Implementation:
+
+```text
+rl\strategy_filtered_datasets.py
+rl\strategy_imitation.py
+scripts\train_strategy_imitation.py
+tests\test_strategy_filtered_datasets.py
+tests\test_strategy_imitation.py
+```
+
+New opt-in training knobs:
+
+```text
+--recovery-accept-positive-context-filter pre-collapse-recovery
+--recovery-accept-positive-context-oversample-factor <int>
+```
+
+Contract:
+
+```text
+defaults:
+  context filter: off
+  context oversample factor: 1
+
+requires a signal filter
+weights and oversamples only observed accept_positive recovery rows
+pre-collapse-recovery context mirrors the bounded teacher recovery semantics:
+  TECH_ROBO:
+    late high-vespene, no Robo, no immediate base threat
+  BUILD_STATIC_DEFENSE:
+    late low-static-defense, affordable static defense, no immediate base threat
+  PRODUCE_ARMY:
+    supply/resource available with idle production or underbuilt army
+does not synthesize labels
+does not change default runtime
+```
+
+Candidate grid from combined fresh + threat + anti-air + pre-collapse data:
+
+```text
+context-only:
+  run: runs\20260702_153843_20260702_strategy_imitation_context_recovery_static_w4_tech_w4_cap2_v1
+  weights:
+    BUILD_STATIC_DEFENSE: 4.0
+    TECH_ROBO: 4.0
+  context_filter: pre-collapse-recovery
+  context_oversample_factor: 1
+  examples: 340
+  context_matched_recovery_accept_positive_examples: 5
+  weighted_examples: 3
+  train_accuracy: 0.588
+  validation_accuracy: 0.485
+  online-smoke-v2 signal:
+    accept_positive_match: 1/6
+    veto_negative_match: 4/4
+    action_space_exhausted_match: 2/2
+  online-smoke-v2 recovery:
+    missed_checkpoint_pre_collapse_recovery_rows: 0/6
+    accept_positive_recovery_match: 1/3
+  combined signal:
+    accept_positive_match: 29/112
+    veto_negative_match: 8/13
+    drop_non_executable_match: 1/452
+    action_space_exhausted_match: 23/23
+  combined recovery:
+    missed_checkpoint_pre_collapse_recovery_rows: 0/36
+    accept_positive_recovery_match: 16/54
+
+context x3:
+  run: runs\20260702_154310_20260702_strategy_imitation_context_recovery_x3_static_w4_tech_w4_cap2_v1
+  weights:
+    BUILD_STATIC_DEFENSE: 4.0
+    TECH_ROBO: 4.0
+  context_filter: pre-collapse-recovery
+  context_oversample_factor: 3
+  examples: 350
+  train_accuracy: 0.361
+  validation_accuracy: 0.457
+  online-smoke-v2 signal:
+    accept_positive_match: 0/6
+    veto_negative_match: 1/4
+    action_space_exhausted_match: 2/2
+  online-smoke-v2 recovery:
+    missed_checkpoint_pre_collapse_recovery_rows: 0/6
+    accept_positive_recovery_match: 0/3
+  combined signal:
+    accept_positive_match: 23/112
+    veto_negative_match: 9/13
+    drop_non_executable_match: 1/452
+    action_space_exhausted_match: 23/23
+  combined recovery:
+    missed_checkpoint_pre_collapse_recovery_rows: 0/36
+    accept_positive_recovery_match: 19/54
+
+context x10:
+  run: runs\20260702_154218_20260702_strategy_imitation_context_recovery_x10_static_w4_tech_w4_cap2_v1
+  weights:
+    BUILD_STATIC_DEFENSE: 4.0
+    TECH_ROBO: 4.0
+  context_filter: pre-collapse-recovery
+  context_oversample_factor: 10
+  examples: 385
+  train_accuracy: 0.614
+  validation_accuracy: 0.688
+  online-smoke-v2 signal:
+    accept_positive_match: 2/6
+    veto_negative_match: 4/4
+    action_space_exhausted_match: 2/2
+  online-smoke-v2 recovery:
+    missed_checkpoint_pre_collapse_recovery_rows: 0/6
+    accept_positive_recovery_match: 2/3
+  combined signal:
+    accept_positive_match: 21/112
+    veto_negative_match: 6/13
+    drop_non_executable_match: 0/452
+    action_space_exhausted_match: 23/23
+  combined recovery:
+    missed_checkpoint_pre_collapse_recovery_rows: 6/36
+    accept_positive_recovery_match: 12/54
+```
+
+Decision:
+
+```text
+Do not promote context-only, context x3, or context x10.
+Do not run online smoke from these candidates.
+Do not change default runtime.
+
+Context-aware weighting/sampling is useful evidence, but it is not sufficient.
+The context-only run is too sparse: only 5 recovery accept-positive rows match
+the context, and only 3 receive the action-specific weight. The x3 run reduces
+online-smoke-v2 veto matches to 1/4, but loses all online recovery
+accept-positive rows. The x10 run improves online recovery accept-positive to
+2/3, but over-shifts toward BUILD_STATIC_DEFENSE and regresses the combined
+pre-collapse recovery gate with 6/36 missed windows.
+
+Next work should prefer new targeted data or a richer slice objective over more
+blind oversampling:
+  add more matched context-positive rows for both TECH_ROBO and BUILD_STATIC_DEFENSE
+  separate TECH_ROBO and static-defense context slices during evaluation
+  avoid letting one recovery action absorb another action's positives
+  keep veto/action-space/drop_non_executable gates strict
+```
+
+## Previous Iteration: Action-Specific Recovery Accept-Positive Weights
+
+Implementation:
+
+```text
+rl\strategy_filtered_datasets.py
+rl\strategy_imitation.py
+scripts\train_strategy_imitation.py
+tests\test_strategy_filtered_datasets.py
+tests\test_strategy_imitation.py
+```
+
+New opt-in training knob:
+
+```text
+--recovery-accept-positive-action-loss-weight ACTION=WEIGHT
+```
+
+Contract:
+
+```text
+default: no action-specific overrides
+requires a signal filter
+valid actions:
+  TECH_ROBO
+  PRODUCE_ARMY
+  BUILD_STATIC_DEFENSE
+weights must be >= 1.0
+action overrides replace the global recovery accept-positive weight
+weights only observed accept_positive recovery rows
+does not synthesize labels
+does not change default runtime
+```
+
+Candidate grid from combined fresh + threat + anti-air + pre-collapse data:
+
+```text
+static-only:
+  run: runs\20260702_152639_20260702_strategy_imitation_static_recovery_accept_w4_cap2_v1
+  weights:
+    BUILD_STATIC_DEFENSE: 4.0
+  examples: 340
+  train_accuracy: 0.357
+  validation_accuracy: 0.265
+  online-smoke-v2 executable-mask signal audit:
+    signal_healthy: false
+    accept_positive_match: 4/6
+    veto_negative_match: 4/4
+    action_space_exhausted_match: 2/2
+  online-smoke-v2 checkpoint pre-collapse recovery audit:
+    recommendation: hold
+    rows_with_checkpoint_pre_collapse_executable_recovery: 2/6
+    missed_checkpoint_pre_collapse_recovery_rows: 4/6
+    accept_positive_recovery_match: 2/3
+
+static + tech w3:
+  run: runs\20260702_152738_20260702_strategy_imitation_static_w4_tech_w3_recovery_accept_cap2_v1
+  weights:
+    BUILD_STATIC_DEFENSE: 4.0
+    TECH_ROBO: 3.0
+  examples: 340
+  train_accuracy: 0.125
+  validation_accuracy: 0.162
+  online-smoke-v2 executable-mask signal audit:
+    signal_healthy: false
+    accept_positive_match: 1/6
+    veto_negative_match: 3/4
+    action_space_exhausted_match: 2/2
+  online-smoke-v2 checkpoint pre-collapse recovery audit:
+    recommendation: hold
+    rows_with_checkpoint_pre_collapse_executable_recovery: 6/6
+    missed_checkpoint_pre_collapse_recovery_rows: 0/6
+    accept_positive_recovery_match: 1/3
+
+static + tech w4:
+  run: runs\20260702_152837_20260702_strategy_imitation_static_w4_tech_w4_recovery_accept_cap2_v1
+  weights:
+    BUILD_STATIC_DEFENSE: 4.0
+    TECH_ROBO: 4.0
+  examples: 340
+  train_accuracy: 0.331
+  validation_accuracy: 0.309
+  online-smoke-v2 executable-mask signal audit:
+    signal_healthy: false
+    accept_positive_match: 1/6
+    veto_negative_match: 4/4
+    action_space_exhausted_match: 2/2
+  online-smoke-v2 checkpoint pre-collapse recovery audit:
+    recommendation: hold
+    rows_with_checkpoint_pre_collapse_executable_recovery: 6/6
+    missed_checkpoint_pre_collapse_recovery_rows: 0/6
+    accept_positive_recovery_match: 1/3
+  combined executable-mask signal audit:
+    signal_healthy: false
+    accept_positive_match: 20/112
+    veto_negative_match: 7/13
+    drop_non_executable_match: 0/452
+    action_space_exhausted_match: 23/23
+  combined checkpoint pre-collapse recovery audit:
+    accept_positive_recovery_match: 19/54
+```
+
+Decision:
+
+```text
+Do not promote any action-specific recovery accept-positive checkpoint.
+Do not run online smoke from these candidates.
+Do not change default runtime.
+
+The action-specific knob is useful as a diagnostic and training ablation. The
+static-only candidate preserves more BUILD_STATIC_DEFENSE positives on the
+online-smoke-v2 surface, but loses Thunderbird TECH_ROBO pre-collapse recovery
+windows and keeps veto/action-space bad rows. The static+tech candidates restore
+the TECH_ROBO pre-collapse windows, but lose the static-positive gain and still
+fail veto/action-space gates.
+
+The next experiment should stop treating this as a scalar-weight problem. Build
+a context-aware recovery preservation objective or sampler:
+  preserve BUILD_STATIC_DEFENSE only in static-defense contexts
+  preserve TECH_ROBO only in first-robo/high-vespene/no-robo contexts
+  avoid rewarding recovery actions outside their own context
+  keep veto/action-space and drop_non_executable avoidance strict
+```
+
+## Previous Iteration: Recovery Accept-Positive Loss Weight
+
+Implementation:
+
+```text
+rl\strategy_filtered_datasets.py
+rl\strategy_imitation.py
+scripts\train_strategy_imitation.py
+tests\test_strategy_filtered_datasets.py
+tests\test_strategy_imitation.py
+```
+
+New opt-in training knob:
+
+```text
+--recovery-accept-positive-loss-weight <float>
+```
+
+Contract:
+
+```text
+default: 1.0, no behavior change
+requires a signal filter
+weights only observed accept_positive recovery rows:
+  TECH_ROBO
+  PRODUCE_ARMY
+  BUILD_STATIC_DEFENSE
+does not synthesize labels
+does not change default runtime
+```
+
+Candidate grid from combined fresh + threat + anti-air + pre-collapse data:
+
+```text
+w2:
+  run: runs\20260702_151609_20260702_strategy_imitation_recovery_accept_positive_w2_cap2_v1
+  examples: 340
+  weighted recovery accept-positive examples: 54
+  sample_weight_sum: 394.0
+  train_accuracy: 0.176
+  validation_accuracy: 0.206
+  online-smoke-v2 executable-mask signal audit:
+    accept_positive_match: 1/6
+    veto_negative_match: 4/4
+    action_space_exhausted_match: 2/2
+  online-smoke-v2 checkpoint pre-collapse recovery audit:
+    accept_positive_recovery_match: 1/3
+  combined executable-mask signal audit:
+    accept_positive_match: 20/112
+    veto_negative_match: 7/13
+    action_space_exhausted_match: 23/23
+  combined checkpoint pre-collapse recovery audit:
+    accept_positive_recovery_match: 19/54
+
+w3:
+  run: runs\20260702_151658_20260702_strategy_imitation_recovery_accept_positive_w3_cap2_v1
+  examples: 340
+  weighted recovery accept-positive examples: 54
+  sample_weight_sum: 448.0
+  train_accuracy: 0.140
+  validation_accuracy: 0.191
+  online-smoke-v2 executable-mask signal audit:
+    accept_positive_match: 1/6
+    veto_negative_match: 0/4
+    action_space_exhausted_match: 2/2
+  online-smoke-v2 checkpoint pre-collapse recovery audit:
+    accept_positive_recovery_match: 1/3
+  combined executable-mask signal audit:
+    accept_positive_match: 21/112
+    veto_negative_match: 5/13
+    drop_non_executable_match: 1/452
+    action_space_exhausted_match: 23/23
+  combined checkpoint pre-collapse recovery audit:
+    accept_positive_recovery_match: 20/54
+
+w4:
+  run: runs\20260702_151509_20260702_strategy_imitation_recovery_accept_positive_w4_cap2_v1
+  examples: 340
+  weighted recovery accept-positive examples: 54
+  sample_weight_sum: 502.0
+  train_accuracy: 0.136
+  validation_accuracy: 0.176
+  online-smoke-v2 executable-mask signal audit:
+    accept_positive_match: 1/6
+    veto_negative_match: 0/4
+    action_space_exhausted_match: 2/2
+  online-smoke-v2 checkpoint pre-collapse recovery audit:
+    accept_positive_recovery_match: 1/3
+  combined executable-mask signal audit:
+    accept_positive_match: 21/112
+    veto_negative_match: 9/13
+    drop_non_executable_match: 56/452
+    action_space_exhausted_match: 23/23
+  combined checkpoint pre-collapse recovery audit:
+    accept_positive_recovery_match: 20/54
+```
+
+Decision:
+
+```text
+Do not promote w2, w3, or w4.
+Do not run online smoke from these candidates.
+Do not change default runtime.
+
+The new loss-weight knob is useful as an ablation: w3/w4 clear online-smoke-v2
+veto_negative matches under executable-mask prediction. It is not sufficient:
+action_space_exhausted matches remain 2/2, online recovery accept-positive
+match remains 1/3, and combined recovery accept-positive match remains only
+20/54 at best.
+
+Next experiment should not keep increasing this scalar weight. The blocker is
+now narrower: preserve BUILD_STATIC_DEFENSE recovery accept-positive rows and
+avoid STAY_COURSE/action-space collapse at the same time, likely through a
+focused recovery-positive slice/objective rather than global recovery weighting.
+```
+
+## Previous Iteration: Pre-Collapse Recovery Teacher Batch
+
+Implementation:
+
+```text
+bot\managers\coverage_strategy_policy.py
+run.py
+scripts\evaluate.py
+tests\test_coverage_strategy_policy.py
+tests\test_evaluate.py
+```
+
+New opt-in collection profile:
+
+```text
+--strategy-policy coverage-teacher
+--strategy-teacher-profile pre-collapse-recovery
+```
+
+Focused collection:
+
+```text
+run: runs\20260702_104832_strategy_pre_collapse_recovery_teacher_batch_v1
+strategy trajectories: data\trajectories\strategy_pre_collapse_recovery_teacher_batch_strategy_v1
+grid: ThunderbirdLE / AcropolisLE, Hard Terran Power, 2 games each
+results:
+  AcropolisLE: 1 Victory / 1 Tie
+  ThunderbirdLE: 1 Tie / 1 Defeat
+return codes: 4/4 zero
+```
+
+New-data gates:
+
+```text
+readiness:
+  recommendation: train
+  training_ready: true
+  trajectory_detail_gate: ready
+  policy_explanation_gate: ready
+  observation_detail_gate: ready
+
+pre-collapse recovery:
+  recommendation: ready
+  rows: 265
+  training_rows: 261
+  target_rows: 15
+  rows_with_pre_collapse_selected_executable_recovery: 15/15
+  missed_pre_collapse_recovery_rows: 0/15
+```
+
+Combined fresh + threat + anti-air + pre-collapse-recovery gates:
+
+```text
+readiness:
+  recommendation: train
+  training_ready: true
+
+pre-collapse recovery:
+  recommendation: ready
+  rows: 1458
+  training_rows: 1433
+  target_rows: 36
+  rows_with_pre_collapse_selected_executable_recovery: 36/36
+  missed_pre_collapse_recovery_rows: 0/36
+```
+
+Candidate checkpoints from the combined data:
+
+```text
+recovery-safe cap2:
+  run: runs\20260702_105359_20260702_strategy_imitation_pre_collapse_recovery_teacher_cap2_v1
+  examples: 340
+  train_accuracy: 0.614
+  validation_accuracy: 0.529
+  combined executable-mask audit: signal_healthy=false, accept_positive_match=39/112, veto_negative_match=9/13, action_space_exhausted_match=23/23
+  online-smoke-v2 executable-mask audit: signal_healthy=false, accept_positive_match=0/6, veto_negative_match=4/4, action_space_exhausted_match=2/2
+
+trainable cap2:
+  run: runs\20260702_105447_20260702_strategy_imitation_pre_collapse_recovery_teacher_trainable_cap2_v1
+  examples: 340
+  train_accuracy: 0.467
+  validation_accuracy: 0.353
+  combined executable-mask audit: signal_healthy=false, accept_positive_match=33/112, veto_negative_match=9/13, action_space_exhausted_match=23/23
+  online-smoke-v2 executable-mask audit: signal_healthy=false, accept_positive_match=0/6, veto_negative_match=4/4, action_space_exhausted_match=2/2
+```
+
+Decision:
+
+```text
+Keep the opt-in teacher profile and targeted trajectories.
+Do not promote either new checkpoint.
+Do not run an online smoke from these candidates.
+Next iteration should add a checkpoint-level recovery-window audit/slice or improve the label/training objective so online-smoke-v2 accept-positive recovery labels are not sacrificed while avoiding veto/action-space bad labels.
+```
 
 ## Safety
 
@@ -301,12 +893,12 @@ Do not start PPO yet.
 
 Current next work:
 
-1. Implement `AIBuild` as an eval/data-collection dimension.
-2. Store `opponent_ai_build` in eval records, experiment config, and army/strategy trajectory metadata.
-3. Use that data to compare rule, coverage-teacher, and strategy policies by opponent build type.
-4. Then design a local `TacticSpec` / `TacticState` / `TacticSelector` tactic pool.
-5. Keep tactic behavior explicit opt-in and preserve default rule/no-op behavior.
-6. Only consider PPO after stable army and strategy learned baselines, reward design, and environment boundaries exist.
+1. Keep the default runtime at `--strategy-policy rule --strategy-tactic-mode off`.
+2. Keep the Photon Cannon / affordability / successful-execution metadata fixes; they improved data quality and execution realism.
+3. Treat the old online smoke v2 as the current regression surface for veto/action-space failures.
+4. Inspect the rows where the newest candidate predicts veto-negative or action-space-exhausted labels.
+5. Prefer a targeted objective or eval slice for veto/action-space avoidance before collecting more generic threat data.
+6. Only consider another guarded online checkpoint smoke after offline regression surfaces no longer show veto/action-space blockers or unsafe fallback.
 
 ## Documentation
 
@@ -7384,6 +7976,2311 @@ Validation:
 
 Get-Process SC2,SC2_x64 -ErrorAction SilentlyContinue
   no process output
+```
+
+## 2026-06-30 Anti-Air Recovery Teacher Affordability Follow-Up
+
+Scope:
+
+```text
+Continue from the anti-air recovery diagnostic.
+Do not promote checkpoints.
+Do not change default runtime.
+Do not run PPO.
+
+Make the anti-air recovery target more concrete:
+  static defense should mean Photon Cannon when anti-air recovery is required
+  policy labels should respect immediate affordability
+  successful execution metadata should prevent false non-executable labels on
+  post-spend trajectory rows
+```
+
+Implemented:
+
+```text
+bot\managers\strategy_executor.py
+  BUILD_STATIC_DEFENSE now prefers PHOTONCANNON when a ready Forge exists.
+  If cannon is unavailable or unaffordable and Cybernetics Core is ready, it
+  can still fall back to Shield Battery.
+
+bot\managers\coverage_strategy_policy.py
+  TECH_ROBO is not labeled unless minerals >= 150 and vespene >= 100.
+  BUILD_STATIC_DEFENSE under threat is not labeled unless minerals >= 100.
+  BOOST_WORKERS is no longer selected while the base is under threat.
+  A midgame_static_defense_floor chooses BUILD_STATIC_DEFENSE when:
+    game_time >= 360
+    ready_forge > 0
+    static defense count < base count
+    minerals >= 150
+
+rl\strategy_signal_dataset.py
+rl\strategy_action_space_analysis.py
+rl\strategy_anti_air_recovery_analysis.py
+  Recorded rows with successful execution metadata are treated as immediately
+  executable for the recorded action, which avoids labeling post-spend rows as
+  non-executable after the executor already consumed resources.
+
+  For anti-air recovery specifically, BUILD_STATIC_DEFENSE counts as anti-air
+  recovery only when successful execution built PHOTONCANNON. Shield Battery is
+  no longer credited as anti-air recovery.
+```
+
+Original online smoke v2 regression surface after the refined anti-air
+diagnostic:
+
+```text
+trajectory:
+  data\trajectories\strategy_checkpoint_cap2_critic_t095_first_exec_online_smoke_runtime_aligned_strategy_v2
+
+artifact:
+  runs\20260630_153145_strategy_checkpoint_cap2_critic_t095_first_exec_online_smoke_runtime_aligned_v2\artifacts\strategy_anti_air_recovery_online_smoke_v2.json
+
+files: 2
+air_threat_rows: 8/124
+air_threat_rows_without_anti_air: 5/8
+anti_air_gap_files: 2/2
+files_with_pre_gap_recovery_window: 2/2
+files_with_pre_gap_executable_recovery_selected: 0/2
+missed_recovery_windows: 2/2
+recovery_executable_counts:
+  PRODUCE_ARMY=24
+  BUILD_STATIC_DEFENSE=4
+  TECH_ROBO=53
+```
+
+Single smoke after the Photon Cannon executor and affordability teacher changes:
+
+```text
+run:
+  runs\20260630_162804_strategy_anti_air_recovery_teacher_affordability_smoke_v1
+strategy trajectories:
+  data\trajectories\strategy_anti_air_recovery_teacher_affordability_strategy_v1
+
+result:
+  1 Tie
+
+key evidence:
+  at 525.7s, BUILD_STATIC_DEFENSE selected for midgame_static_defense_floor
+  strategy_execution_effect=build_structure
+  strategy_execution_unit_type=PHOTONCANNON
+
+anti-air report:
+  air_threat_rows_without_anti_air: 0/3
+  anti_air_gap_files: 0/1
+```
+
+Focused four-game anti-air recovery teacher batch:
+
+```text
+run:
+  runs\20260630_163009_strategy_anti_air_recovery_teacher_affordability_batch_v1
+strategy trajectories:
+  data\trajectories\strategy_anti_air_recovery_teacher_affordability_batch_strategy_v1
+army trajectories:
+  data\trajectories\strategy_anti_air_recovery_teacher_affordability_batch_army_v1
+
+grid:
+  maps: AcropolisLE, ThunderbirdLE
+  difficulty: Hard
+  opponent: Terran
+  ai_builds: Power, Air
+  games_per_combo: 1
+  army_policy: coverage-teacher
+  strategy_policy: coverage-teacher
+  strategy_tactic_mode: off
+  game_time_limit: 700
+
+results:
+  AcropolisLE / Power: Defeat
+  AcropolisLE / Air: Tie
+  ThunderbirdLE / Power: Tie
+  ThunderbirdLE / Air: Victory
+```
+
+Batch readiness and anti-air recovery:
+
+```text
+readiness artifact:
+  runs\20260630_163009_strategy_anti_air_recovery_teacher_affordability_batch_v1\artifacts\strategy_data_readiness_teacher_affordability_batch_v1_summary.json
+recommendation: train
+training_ready: true
+trajectory_detail_gate: ready
+policy_explanation_gate: ready
+observation_detail_gate: ready
+
+anti-air artifact:
+  runs\20260630_163009_strategy_anti_air_recovery_teacher_affordability_batch_v1\artifacts\strategy_anti_air_recovery_teacher_affordability_batch_v1.json
+
+files: 4
+rows: 229
+training_rows: 225
+air_threat_rows: 11/225
+air_threat_rows_without_anti_air: 4/11
+anti_air_gap_files: 2/4
+files_with_pre_gap_recovery_window: 2/2
+files_with_pre_gap_executable_recovery_selected: 2/2
+missed_recovery_windows: 0/2
+selected executable recovery:
+  PRODUCE_ARMY=5
+  TECH_ROBO=2
+```
+
+Combined fresh + threat + anti-air readiness and signal data:
+
+```text
+inputs:
+  data\trajectories\strategy_fresh_metadata_batch_strategy_v1
+  data\trajectories\strategy_fresh_metadata_batch_strategy_v2
+  data\trajectories\strategy_threat_positive_teacher_batch_strategy_v1
+  data\trajectories\strategy_anti_air_recovery_teacher_affordability_batch_strategy_v1
+
+readiness:
+  runs\strategy_data_readiness_fresh_plus_threat_plus_anti_air_affordability_v1_summary.json
+  recommendation: train
+  training_ready: true
+
+signal dataset:
+  runs\strategy_signal_dataset_fresh_plus_threat_plus_anti_air_affordability_v1.json
+  files: 21
+  rows: 1193
+  training_rows: 1172
+  accept_positive: 88
+  action_space_exhausted: 11
+  drop_ambiguous: 656
+  drop_non_executable: 404
+  veto_negative: 10
+  weak_context: 3
+```
+
+New candidate training:
+
+```text
+imitation:
+  run:
+    runs\20260630_163807_strategy_imitation_fresh_plus_threat_plus_anti_air_affordability_cap2_v1
+  checkpoint:
+    runs\20260630_163807_strategy_imitation_fresh_plus_threat_plus_anti_air_affordability_cap2_v1\checkpoints\policy.pt
+  signal-filter: trainable
+  max-drop-ambiguous-per-positive: 2
+  class-weighting: balanced
+  epochs: 5
+  examples: 267
+  train_accuracy: 0.607
+  validation_accuracy: 0.698
+
+action critic:
+  run:
+    runs\20260630_163834_strategy_action_critic_fresh_plus_threat_plus_anti_air_affordability_schema_v2_v1
+  checkpoint:
+    runs\20260630_163834_strategy_action_critic_fresh_plus_threat_plus_anti_air_affordability_schema_v2_v1\checkpoints\critic.pt
+  label_policy: trainable
+  feature_schema: strategy_action_critic_v2
+  examples: 1161
+  unsafe_examples: 414
+  validation accuracy/precision/recall: 0.948 / 0.865 / 1.000
+```
+
+Threshold sweeps:
+
+```text
+combined training surface:
+  artifact:
+    runs\20260630_163807_strategy_imitation_fresh_plus_threat_plus_anti_air_affordability_cap2_v1\artifacts\action_critic_threshold_sweep_on_fresh_plus_threat_plus_anti_air_affordability.json
+  recommendation: hold
+  selected: threshold=0.700 fallback=first-executable
+  blocking_reasons:
+    predicted_matches_veto_negative_labels
+    predicted_matches_action_space_exhausted_labels
+  veto_negative_match: 2/10
+  fallback_rows: 0
+  unsafe_fallback_rows: 0
+  accept_positive_match: 16/88
+
+online smoke v2 regression surface:
+  artifact:
+    runs\20260630_163807_strategy_imitation_fresh_plus_threat_plus_anti_air_affordability_cap2_v1\artifacts\action_critic_threshold_sweep_on_online_smoke_v2_regression.json
+  recommendation: hold
+  selected: threshold=0.900 fallback=first-executable
+  blocking_reasons:
+    predicted_matches_veto_negative_labels
+    predicted_matches_action_space_exhausted_labels
+    action_critic_all_executable_candidates_vetoed
+  veto_negative_match: 4/4
+  fallback_rows: 24
+  unsafe_fallback_rows: 24
+  accept_positive_match: 2/6
+```
+
+Decision:
+
+```text
+Do not promote the new imitation checkpoint.
+Do not promote the new action critic.
+Do not change default runtime.
+Do not run PPO.
+
+The executor and teacher fixes should stay. They created real Photon Cannon
+evidence and removed a false post-spend non-executable labeling problem.
+
+The latest candidate is still not promotable. The remaining failure is now less
+about missing generic anti-air recovery rows and more about the model/critic not
+reliably avoiding veto-negative and action-space-exhausted rows, especially on
+the old online smoke v2 regression surface.
+```
+
+Next work:
+
+```text
+Inspect the threshold-sweep decisions for rows where predicted actions match:
+  veto_negative
+  action_space_exhausted
+  all-executable-candidates-vetoed fallback
+
+Do not collect more generic threat-positive data before forming a concrete
+hypothesis for those rows.
+
+Possible next experiment:
+  add a targeted training/eval slice or objective pressure for veto_negative and
+  action_space_exhausted avoidance, then rerun offline sweeps before any guarded
+  online checkpoint smoke.
+```
+
+Validation:
+
+```text
+.\.venv\Scripts\python.exe -m pytest -q
+  338 passed
+
+.\.venv\Scripts\python.exe scripts\check_env.py
+  OK
+
+git diff --check
+  only LF/CRLF working-copy warnings
+
+Get-Process SC2,SC2_x64 -ErrorAction SilentlyContinue
+  no process output
+```
+
+Action-space-aware critic follow-up:
+
+```text
+Implemented:
+  rl\strategy_checkpoint_signal_audit.py
+    decision rows now include action_critic_candidate_unsafe_probabilities,
+    aligned with action_critic_candidate_actions.
+
+  scripts\audit_strategy_checkpoint_signals.py
+    --show-decisions now prints action_critic_candidate_unsafe values.
+
+  rl\strategy_action_critic.py
+    added experimental label policy: trainable-action-space
+    This keeps existing trainable behavior unchanged, but labels
+    action_space_exhausted as unsafe for explicit critic experiments.
+
+Tests:
+  .\.venv\Scripts\python.exe -m pytest tests\test_strategy_action_critic.py tests\test_strategy_checkpoint_signal_audit.py tests\test_strategy_action_critic_threshold_sweep.py -q
+    33 passed
+```
+
+Candidate critic:
+
+```text
+run:
+  runs\20260630_165359_strategy_action_critic_fresh_plus_threat_plus_anti_air_affordability_schema_v2_action_space_v1
+checkpoint:
+  runs\20260630_165359_strategy_action_critic_fresh_plus_threat_plus_anti_air_affordability_schema_v2_action_space_v1\checkpoints\critic.pt
+
+label_policy: trainable-action-space
+feature_schema: strategy_action_critic_v2
+examples: 1172
+unsafe_examples: 425
+train accuracy/precision/recall: 0.954 / 0.889 / 0.997
+validation accuracy/precision/recall: 0.932 / 0.853 / 0.989
+```
+
+Sweep results:
+
+```text
+combined fresh+threat+anti-air training surface:
+  artifact:
+    runs\20260630_163807_strategy_imitation_fresh_plus_threat_plus_anti_air_affordability_cap2_v1\artifacts\action_critic_threshold_sweep_action_space_critic_on_fresh_plus_threat_plus_anti_air_affordability.json
+  recommendation: hold
+  selected: threshold=0.700 fallback=threat-risk
+  blocking_reasons:
+    predicted_matches_action_space_exhausted_labels
+    action_critic_all_executable_candidates_vetoed
+  veto_negative_match: 0/10
+  action_critic_fallback_rows: 107
+  unsafe_fallback_rows: 71
+  accept_positive_match: 19/88
+
+online smoke v2 regression surface:
+  artifact:
+    runs\20260630_163807_strategy_imitation_fresh_plus_threat_plus_anti_air_affordability_cap2_v1\artifacts\action_critic_threshold_sweep_action_space_critic_on_online_smoke_v2_regression.json
+  recommendation: hold
+  selected: threshold=0.900 fallback=rule-safe
+  blocking_reasons:
+    predicted_matches_action_space_exhausted_labels
+    action_critic_all_executable_candidates_vetoed
+  veto_negative_match: 0/4
+  action_critic_fallback_rows: 34
+  unsafe_fallback_rows: 34
+  accept_positive_match: 3/6
+```
+
+Interpretation:
+
+```text
+The action-space-aware critic improves one symptom: online-smoke-v2
+veto_negative_match can drop from 4/4 to 0/4.
+
+It does not make the checkpoint promotable. It increases fallback pressure and
+does not fix action_space_exhausted rows.
+
+The new candidate-probability audit shows why:
+  online-smoke-v2 action_space_exhausted rows:
+    2 rows, both candidate_count=1, candidates=STAY_COURSE
+
+  online-smoke-v2 veto_negative rows:
+    3 rows candidate_count=2, candidates=TECH_ROBO+STAY_COURSE
+    1 row candidate_count=1, candidates=STAY_COURSE
+
+The two Acropolis action_space_exhausted rows are not avoidable by a different
+critic threshold. By the time they appear, the executable strategy action space
+has already collapsed to STAY_COURSE. Fixing them requires earlier recovery or a
+new bounded executable response surface, not another threshold sweep.
+```
+
+Decision:
+
+```text
+Do not promote the action-space-aware critic.
+Do not promote the imitation checkpoint.
+Do not change default runtime.
+Do not run PPO.
+
+Keep the audit probability field and the experimental label policy; they are
+useful diagnostic/training controls. Treat the trained checkpoint from this
+experiment as hold-only evidence.
+```
+
+Next work:
+
+```text
+Stop trying to solve the current blocker with critic thresholds alone.
+
+Split the next analysis into:
+  avoidable veto rows:
+    where candidates include TECH_ROBO or another non-STAY executable action
+
+  unavoidable action-space-exhausted rows:
+    where candidates only include STAY_COURSE
+
+For unavoidable rows, move the intervention earlier in the timeline:
+  find the last time before collapse when TECH_ROBO, PRODUCE_ARMY, or
+  BUILD_STATIC_DEFENSE was executable
+  verify whether the teacher/policy selected recovery there
+  collect or construct positive examples at that pre-collapse point
+
+Only consider a new online smoke after the offline regression surface has no
+avoidable veto matches and the unavoidable action-space rows have a concrete
+earlier recovery hypothesis.
+```
+
+## 2026-06-30 Pre-Collapse Recovery Diagnostic Follow-Up
+
+Scope:
+
+```text
+Continue from the action-space-aware critic hold.
+No PPO.
+No checkpoint or critic promotion.
+No default runtime change.
+Use offline diagnostics to explain whether veto/action-space failures were
+avoidable at the target row or required earlier recovery.
+```
+
+Implemented:
+
+```text
+rl\strategy_pre_collapse_recovery_analysis.py
+scripts\analyze_strategy_pre_collapse_recovery.py
+tests\test_strategy_pre_collapse_recovery_analysis.py
+```
+
+The diagnostic targets `veto_negative` and `action_space_exhausted` rows, then
+looks back for executable recovery actions:
+
+```text
+TECH_ROBO
+PRODUCE_ARMY
+BUILD_STATIC_DEFENSE
+```
+
+It classifies target rows as:
+
+```text
+avoidable_recovery_available
+avoidable_non_recovery_available
+unavoidable_only_stay_course
+unavoidable_no_executable_actions
+```
+
+The diagnostic now also acts as a strict offline gate:
+
+```text
+recommendation: ready | hold
+blocking_reasons:
+  missed_pre_collapse_recovery_rows
+  missed_pre_collapse_recovery_rate
+default thresholds:
+  max_missed_pre_collapse_recovery_rows: 0
+  max_missed_pre_collapse_recovery_rate: 0.000
+CLI:
+  --fail-on-hold
+```
+
+Online-smoke-v2 regression surface:
+
+```text
+input:
+  data\trajectories\strategy_checkpoint_cap2_critic_t095_first_exec_online_smoke_runtime_aligned_strategy_v2
+
+artifacts:
+  runs\20260630_153145_strategy_checkpoint_cap2_critic_t095_first_exec_online_smoke_runtime_aligned_v2\artifacts\strategy_pre_collapse_recovery_online_smoke_v2.json
+  runs\20260630_153145_strategy_checkpoint_cap2_critic_t095_first_exec_online_smoke_runtime_aligned_v2\artifacts\strategy_pre_collapse_recovery_online_smoke_v2.txt
+
+recommendation: hold
+blocking_reasons:
+  missed_pre_collapse_recovery_rows
+  missed_pre_collapse_recovery_rate
+target_rows: 6
+missed_pre_collapse_recovery_rate: 0.833
+avoidability_counts:
+  avoidable_recovery_available: 4
+  unavoidable_only_stay_course: 2
+target_training_use_counts:
+  action_space_exhausted: 2
+  veto_negative: 4
+target_threat_state_counts:
+  air_and_ground_threat: 6
+
+rows_with_pre_collapse_recovery_window: 6/6
+rows_with_pre_collapse_selected_recovery: 1/6
+rows_with_pre_collapse_selected_executable_recovery: 1/6
+missed_pre_collapse_recovery_rows: 5/6
+
+pre_collapse_recovery_executable_counts_by_action:
+  TECH_ROBO: 83
+  PRODUCE_ARMY: 8
+  BUILD_STATIC_DEFENSE: 4
+```
+
+Online-smoke-v2 split:
+
+```text
+AcropolisLE / Hard Terran Power:
+  targets: 2
+  avoidability: unavoidable_only_stay_course=2
+  training_use: action_space_exhausted=2
+  selected executable recovery before collapse: 1/2
+  missed pre-collapse recovery rows: 1/2
+  key missed window: BUILD_STATIC_DEFENSE executable around 480.0s
+
+ThunderbirdLE / Hard Terran Power:
+  targets: 4
+  avoidability: avoidable_recovery_available=4
+  training_use: veto_negative=4
+  selected executable recovery before collapse: 0/4
+  missed pre-collapse recovery rows: 4/4
+  key missed windows: TECH_ROBO executable repeatedly from about 594.3s to
+    685.7s, often while recorded action remained STAY_COURSE
+```
+
+Combined fresh+threat+anti-air teacher surface:
+
+```text
+inputs:
+  data\trajectories\strategy_fresh_metadata_batch_strategy_v1
+  data\trajectories\strategy_fresh_metadata_batch_strategy_v2
+  data\trajectories\strategy_threat_positive_teacher_batch_strategy_v1
+  data\trajectories\strategy_anti_air_recovery_teacher_affordability_batch_strategy_v1
+
+artifacts:
+  runs\strategy_pre_collapse_recovery_fresh_plus_threat_plus_anti_air_affordability_v1.json
+  runs\strategy_pre_collapse_recovery_fresh_plus_threat_plus_anti_air_affordability_v1.txt
+
+recommendation: ready
+blocking_reasons: <none>
+target_rows: 21
+missed_pre_collapse_recovery_rate: 0.000
+avoidability_counts:
+  avoidable_non_recovery_available: 3
+  avoidable_recovery_available: 7
+  unavoidable_only_stay_course: 11
+target_training_use_counts:
+  action_space_exhausted: 11
+  veto_negative: 10
+
+rows_with_pre_collapse_recovery_window: 21/21
+rows_with_pre_collapse_selected_recovery: 21/21
+rows_with_pre_collapse_selected_executable_recovery: 21/21
+missed_pre_collapse_recovery_rows: 0/21
+
+pre_collapse_recovery_executable_counts_by_action:
+  TECH_ROBO: 72
+  PRODUCE_ARMY: 51
+  BUILD_STATIC_DEFENSE: 131
+pre_collapse_recovery_selected_executable_counts_by_action:
+  TECH_ROBO: 12
+  PRODUCE_ARMY: 36
+  BUILD_STATIC_DEFENSE: 32
+```
+
+Interpretation:
+
+```text
+The teacher/combined data still contains bad target rows, but every target has
+an earlier selected executable recovery action. The online-smoke-v2 regression
+differs because it misses those earlier recovery windows.
+
+There are two online-smoke-v2 failure types:
+
+1. Thunderbird avoidable rows:
+   TECH_ROBO is executable before and sometimes during collapse, but the policy
+   records STAY_COURSE and the critic/gate surface later lands on veto rows.
+
+2. Acropolis late action-space collapse:
+   by target time only STAY_COURSE is executable, so intervention must happen
+   earlier. One target had a prior selected BUILD_STATIC_DEFENSE; the later
+   target missed a BUILD_STATIC_DEFENSE window around 480.0s.
+```
+
+Decision:
+
+```text
+Do not promote the imitation checkpoint.
+Do not promote any action critic.
+Do not change default runtime.
+Do not run PPO.
+
+Stop treating this as a generic threshold problem. The next experiment should
+target missed pre-collapse recovery rows, not broad threat-positive data or
+another action-critic threshold sweep.
+```
+
+Next work:
+
+```text
+Use the offline pre-collapse gate for future candidates. It now reports:
+  recommendation
+  blocking_reasons
+  missed_pre_collapse_recovery_rows
+  missed_pre_collapse_recovery_rate
+  missed TECH_ROBO windows before late air/ground collapse
+  missed PRODUCE_ARMY windows before collapse
+  missed BUILD_STATIC_DEFENSE windows before only-STAY action-space collapse
+
+Then train or collect only against a specific recovery hypothesis, such as:
+  Thunderbird Hard Terran Power:
+    no_threat rows around 594-651s
+    TECH_ROBO executable
+    recorded STAY_COURSE
+    later air_and_ground_threat / veto_negative
+
+  Acropolis Hard Terran Power:
+    row around 480s
+    BUILD_STATIC_DEFENSE executable
+    recorded STAY_COURSE
+    later only-STAY_COURSE action_space_exhausted
+
+Only rerun a guarded online checkpoint smoke after the offline surface improves
+on this pre-collapse slice.
+```
+
+## 2026-07-02 Recovery-Safe Filter Candidate
+
+Scope:
+
+```text
+Continue from the pre-collapse recovery gate.
+No SC2 launch.
+No default runtime change.
+No checkpoint or critic promotion.
+Test whether filtering ambiguous STAY_COURSE recovery-opportunity rows improves
+the offline regression surface.
+```
+
+Implemented:
+
+```text
+rl\strategy_filtered_datasets.py
+  added opt-in signal filter preset:
+    trainable-recovery-safe
+
+scripts\train_strategy_imitation.py
+  exposes the new preset through --signal-filter.
+
+tests\test_strategy_filtered_datasets.py
+  covers recovery-opportunity ambiguous STAY_COURSE removal.
+```
+
+Filter behavior:
+
+```text
+trainable-recovery-safe keeps the normal trainable uses:
+  accept_positive
+  drop_ambiguous
+  weak_context
+
+It additionally removes a drop_ambiguous row when:
+  recorded action is STAY_COURSE
+  at least one recovery action is executable from the current observation:
+    TECH_ROBO
+    PRODUCE_ARMY
+    BUILD_STATIC_DEFENSE
+
+This does not create future-leaking positive labels. It only prevents behavior
+cloning from reinforcing no-op labels at rows where recovery was immediately
+available.
+```
+
+Combined dataset filter comparison with cap2:
+
+```text
+inputs:
+  data\trajectories\strategy_fresh_metadata_batch_strategy_v1
+  data\trajectories\strategy_fresh_metadata_batch_strategy_v2
+  data\trajectories\strategy_threat_positive_teacher_batch_strategy_v1
+  data\trajectories\strategy_anti_air_recovery_teacher_affordability_batch_strategy_v1
+
+trainable:
+  kept_examples: 267
+  kept_by_training_use:
+    accept_positive: 88
+    drop_ambiguous: 176
+    weak_context: 3
+  recovery_opportunity_ambiguous_examples_removed: 0
+
+trainable-recovery-safe:
+  kept_examples: 267
+  kept_by_training_use:
+    accept_positive: 88
+    drop_ambiguous: 176
+    weak_context: 3
+  drop_ambiguous_examples_before_balance: 588
+  drop_ambiguous_examples_removed_by_balance: 412
+  recovery_opportunity_ambiguous_examples_removed: 68
+  recovery_opportunity_removed_actions_by_name:
+    STAY_COURSE: 68
+```
+
+Candidate training:
+
+```text
+run:
+  runs\20260702_081918_20260702_strategy_imitation_recovery_safe_filter_cap2_v1
+
+command shape:
+  scripts\train_strategy_imitation.py <fresh+threat+anti-air inputs>
+    --signal-filter trainable-recovery-safe
+    --max-drop-ambiguous-per-positive 2.0
+    --class-weighting balanced
+    --observation-detail-gate runs\strategy_data_readiness_fresh_plus_threat_plus_anti_air_affordability_v1_observation_detail_gate.json
+
+examples: 267
+train_accuracy: 0.640
+validation_accuracy: 0.660
+checkpoint:
+  runs\20260702_081918_20260702_strategy_imitation_recovery_safe_filter_cap2_v1\checkpoints\policy.pt
+```
+
+Executable-mask audit results:
+
+```text
+combined fresh+threat+anti-air surface:
+  artifact:
+    runs\20260702_081918_20260702_strategy_imitation_recovery_safe_filter_cap2_v1\artifacts\checkpoint_signal_audit_combined_executable_mask.json
+  signal_healthy: false
+  blocking_reasons:
+    predicted_matches_veto_negative_labels
+    predicted_matches_action_space_exhausted_labels
+  accept_positive_match: 23/88
+  veto_negative_match: 5/10
+  action_space_exhausted_match: 11/11
+  predicted_non_executable: 0/1172
+
+online-smoke-v2 regression surface:
+  artifact:
+    runs\20260702_081918_20260702_strategy_imitation_recovery_safe_filter_cap2_v1\artifacts\checkpoint_signal_audit_online_smoke_v2_executable_mask.json
+  signal_healthy: false
+  blocking_reasons:
+    predicted_matches_veto_negative_labels
+    predicted_matches_action_space_exhausted_labels
+  accept_positive_match: 0/6
+  veto_negative_match: 4/4
+  action_space_exhausted_match: 2/2
+  predicted_non_executable: 0/124
+```
+
+Baseline cap2 comparison using the same executable-mask audit:
+
+```text
+baseline checkpoint:
+  runs\20260630_163807_strategy_imitation_fresh_plus_threat_plus_anti_air_affordability_cap2_v1\checkpoints\policy.pt
+
+combined surface:
+  accept_positive_match: 32/88
+  veto_negative_match: 5/10
+  action_space_exhausted_match: 11/11
+
+online-smoke-v2 surface:
+  accept_positive_match: 1/6
+  veto_negative_match: 1/4
+  action_space_exhausted_match: 2/2
+```
+
+Decision:
+
+```text
+Do not promote the recovery-safe-filter checkpoint.
+Do not change default runtime.
+Do not run PPO.
+Do not run an online smoke from this candidate.
+
+The filter is useful as a data-control knob, but filtering alone is not enough.
+It removed 68 ambiguous recovery-opportunity STAY_COURSE rows from the sampling
+pool, yet the trained checkpoint regressed online-smoke-v2 veto matching from
+1/4 to 4/4 under the same executable-mask audit.
+```
+
+Next work:
+
+```text
+Keep trainable-recovery-safe available for controlled experiments, but do not
+treat it as a promotion path by itself.
+
+The next experiment should add positive pressure for recovery actions, not only
+remove ambiguous no-op labels:
+  targeted collection with coverage-teacher on Thunderbird/Acropolis Power
+  positive recovery-window oversampling
+  or a bounded teacher objective for late high-vespene no-robo TECH_ROBO and
+  missed BUILD_STATIC_DEFENSE windows
+
+Before any online smoke, the candidate must improve the offline online-smoke-v2
+surface:
+  veto_negative_match below the baseline 1/4
+  action_space_exhausted rows explained by earlier selected recovery
+  pre_collapse_recovery gate ready on the relevant candidate trajectory surface
+```
+
+## 2026-07-02 Observed Recovery-Positive Oversampling Candidate
+
+Scope:
+
+```text
+Continue from the recovery-safe filter hold.
+No SC2 launch.
+No default runtime change.
+No checkpoint or critic promotion.
+Test whether adding positive pressure by duplicating observed recovery payoff
+examples improves the offline regression surface.
+```
+
+Implemented:
+
+```text
+rl\strategy_filtered_datasets.py
+  added opt-in recovery_positive_oversample_factor.
+
+rl\strategy_imitation.py
+scripts\train_strategy_imitation.py
+  expose recovery_positive_oversample_factor through training config and CLI:
+    --recovery-positive-oversample-factor
+
+tests\test_strategy_filtered_datasets.py
+  covers observed recovery-positive oversampling and validation.
+```
+
+Contract:
+
+```text
+Default factor is 1 and changes nothing.
+
+For factor > 1, only observed accept_positive rows are duplicated, and only for:
+  TECH_ROBO
+  PRODUCE_ARMY
+  BUILD_STATIC_DEFENSE
+
+No synthetic labels are created, and no future pre-collapse failure label is
+inserted into the training set.
+```
+
+Dataset effect on fresh+threat+anti-air with:
+
+```text
+filter: trainable-recovery-safe
+max_drop_ambiguous_per_positive: 2.0
+recovery_positive_oversample_factor: 3
+
+kept_examples: 351
+removed_examples: 905
+kept_by_training_use:
+  accept_positive: 172
+  drop_ambiguous: 176
+  weak_context: 3
+kept_action_counts_by_name:
+  STAY_COURSE: 176
+  EXPAND: 10
+  ADD_GATEWAYS: 22
+  TECH_ROBO: 51
+  FORGE_UPGRADES: 17
+  BUILD_STATIC_DEFENSE: 51
+  PRODUCE_ARMY: 24
+recovery_positive_examples_before_oversample: 42
+recovery_positive_examples_added_by_oversample: 84
+recovery_positive_oversampled_actions_by_name:
+  TECH_ROBO: 34
+  BUILD_STATIC_DEFENSE: 34
+  PRODUCE_ARMY: 16
+```
+
+Candidate training:
+
+```text
+run:
+  runs\20260702_082711_20260702_strategy_imitation_recovery_positive_x3_cap2_v1
+
+examples: 351
+train_accuracy: 0.623
+validation_accuracy: 0.571
+checkpoint:
+  runs\20260702_082711_20260702_strategy_imitation_recovery_positive_x3_cap2_v1\checkpoints\policy.pt
+```
+
+Executable-mask audit results:
+
+```text
+combined fresh+threat+anti-air surface:
+  artifact:
+    runs\20260702_082711_20260702_strategy_imitation_recovery_positive_x3_cap2_v1\artifacts\checkpoint_signal_audit_combined_executable_mask.json
+  signal_healthy: false
+  blocking_reasons:
+    predicted_matches_veto_negative_labels
+    predicted_matches_action_space_exhausted_labels
+  accept_positive_match: 30/88
+  veto_negative_match: 7/10
+  action_space_exhausted_match: 11/11
+  predicted_non_executable: 0/1172
+
+online-smoke-v2 regression surface:
+  artifact:
+    runs\20260702_082711_20260702_strategy_imitation_recovery_positive_x3_cap2_v1\artifacts\checkpoint_signal_audit_online_smoke_v2_executable_mask.json
+  signal_healthy: false
+  blocking_reasons:
+    predicted_matches_veto_negative_labels
+    predicted_matches_action_space_exhausted_labels
+  accept_positive_match: 2/6
+  veto_negative_match: 4/4
+  action_space_exhausted_match: 2/2
+  predicted_non_executable: 0/124
+```
+
+Decision:
+
+```text
+Do not promote the recovery-positive x3 checkpoint.
+Do not change default runtime.
+Do not run PPO.
+Do not run an online smoke from this candidate.
+
+Oversampling observed positives improved the raw positive pressure in the
+dataset, but it did not fix the online-smoke-v2 failure mode. The candidate
+still matches all veto-negative and action-space-exhausted rows on the
+regression surface, and combined-surface veto matching worsened from 5/10 to
+7/10.
+```
+
+Next work:
+
+```text
+Keep recovery-positive oversampling available as an ablation knob.
+
+Do not spend the next cycle only resampling the same observed positives. The
+missing evidence is closer to the actual failure windows:
+  Thunderbird Hard Terran Power:
+    TECH_ROBO executable around 594-651s
+    recorded STAY_COURSE
+    later air_and_ground_threat / veto_negative
+
+  Acropolis Hard Terran Power:
+    BUILD_STATIC_DEFENSE executable around 480s
+    recorded STAY_COURSE
+    later only-STAY_COURSE action-space exhaustion
+
+Next experiment should collect targeted teacher trajectories or add an explicit
+bounded teacher surface for those recovery-window states, then rerun the offline
+online-smoke-v2 audit before any online game.
+```
+
+## 2026-06-30 Online-Smoke Critic Refresh Follow-Up
+
+Scope:
+
+```text
+Continue from the cap2 + action critic online smoke v2 hold.
+No PPO.
+No default runtime change.
+No checkpoint promotion.
+Use online smoke v2 as a regression surface.
+```
+
+Readiness was rerun for the exact combined-plus-online training inputs:
+
+```text
+inputs:
+  data\trajectories\strategy_fresh_metadata_batch_strategy_v1
+  data\trajectories\strategy_fresh_metadata_batch_strategy_v2
+  data\trajectories\strategy_checkpoint_cap2_critic_t095_first_exec_online_smoke_runtime_aligned_strategy_v2
+
+artifacts:
+  runs\strategy_data_readiness_combined_plus_online_smoke_v2_summary.json
+  runs\strategy_data_readiness_combined_plus_online_smoke_v2_observation_detail_gate.json
+
+recommendation: train
+training_ready: true
+trajectory_detail_gate: ready
+policy_explanation_gate: ready
+observation_detail_gate: ready
+```
+
+Refreshed critics:
+
+```text
+v1 feature schema:
+  run: runs\20260630_154211_strategy_action_critic_combined_plus_online_smoke_v2_trainable_v1
+  checkpoint: runs\20260630_154211_strategy_action_critic_combined_plus_online_smoke_v2_trainable_v1\checkpoints\critic.pt
+  examples: 821
+  unsafe examples: 332
+  validation accuracy/precision/recall: 0.988 / 0.972 / 1.000
+
+v2 threat/action-interaction feature schema:
+  run: runs\20260630_154556_strategy_action_critic_combined_plus_online_smoke_v2_trainable_schema_v2_v1
+  checkpoint: runs\20260630_154556_strategy_action_critic_combined_plus_online_smoke_v2_trainable_schema_v2_v1\checkpoints\critic.pt
+  examples: 821
+  unsafe examples: 332
+  validation accuracy/precision/recall: 0.988 / 0.972 / 1.000
+```
+
+Original combined fresh metadata sweeps:
+
+```text
+v1-schema refreshed critic:
+  artifact:
+    runs\20260630_145606_strategy_imitation_fresh_metadata_combined_cap2_v1\artifacts\action_critic_threshold_sweep_combined_plus_online_smoke_v2_critic_on_original_training.json
+  recommendation: promotion_candidate
+  selected: threshold=0.400 fallback=first-executable
+  accept_positive_match=5/13
+  veto_negative_match=0/3
+  drop_non_executable_match=0/324
+  fallback_rows=38
+  unsafe_fallback_rows=0
+
+v2-schema refreshed critic:
+  artifact:
+    runs\20260630_145606_strategy_imitation_fresh_metadata_combined_cap2_v1\artifacts\action_critic_threshold_sweep_combined_plus_online_smoke_v2_schema_v2_critic_on_original_training.json
+  recommendation: promotion_candidate
+  selected: threshold=0.800 fallback=first-executable
+  accept_positive_match=7/13
+  veto_negative_match=0/3
+  drop_non_executable_match=0/324
+  fallback_rows=1
+  unsafe_fallback_rows=0
+```
+
+Online smoke v2 sweeps:
+
+```text
+v1-schema refreshed critic:
+  artifact:
+    runs\20260630_153145_strategy_checkpoint_cap2_critic_t095_first_exec_online_smoke_runtime_aligned_v2\artifacts\action_critic_threshold_sweep_combined_plus_online_smoke_v2_critic_on_online_smoke.json
+  recommendation: hold
+  selected: threshold=0.400 fallback=rule-safe
+  blocking_reasons:
+    predicted_matches_action_space_exhausted_labels
+    action_critic_all_executable_candidates_vetoed
+  accept_positive_match=3/5
+  veto_negative_match=0/4
+  drop_non_executable_match=0/1
+  fallback_rows=8
+  unsafe_fallback_rows=8
+
+v2-schema refreshed critic:
+  artifact:
+    runs\20260630_153145_strategy_checkpoint_cap2_critic_t095_first_exec_online_smoke_runtime_aligned_v2\artifacts\action_critic_threshold_sweep_combined_plus_online_smoke_v2_schema_v2_critic_on_online_smoke.json
+  recommendation: hold
+  selected: threshold=0.200 fallback=rule-safe
+  blocking_reasons:
+    predicted_matches_action_space_exhausted_labels
+    action_critic_all_executable_candidates_vetoed
+  accept_positive_match=3/5
+  veto_negative_match=0/4
+  drop_non_executable_match=0/1
+  fallback_rows=8
+  unsafe_fallback_rows=8
+```
+
+Detailed online audit:
+
+```text
+artifact:
+  runs\20260630_153145_strategy_checkpoint_cap2_critic_t095_first_exec_online_smoke_runtime_aligned_v2\artifacts\checkpoint_signal_audit_combined_plus_online_smoke_v2_critic_t04_rule_safe_online_smoke.json
+
+signal_healthy=false
+blocking_reasons:
+  predicted_matches_action_space_exhausted_labels
+  action_critic_all_executable_candidates_vetoed
+raw_predicted_non_executable=55/124
+masked predicted_non_executable=0/124
+action_critic_fallback_rows=8
+action_critic_safe_fallback_rows=0
+action_critic_unsafe_fallback_rows=8
+action_space_exhausted_match=2/2
+```
+
+Interpretation:
+
+```text
+The critic refresh reduced the online smoke unsafe fallback surface from 40 rows
+to 8 rows and removed veto-negative matches at the selected low-threshold
+rule-safe setting.
+
+It did not make the checkpoint promotable. The remaining failures are late
+Hard Terran Power air-and-ground threat rows around 650-700 seconds where the
+strategy action set is effectively exhausted. Some rows have only STAY_COURSE
+or STAY_COURSE plus BOOST_WORKERS executable; in Thunderbird, rule-safe falls
+back to TECH_ROBO after every executable candidate is critic-vetoed.
+
+Adding more threshold sweeps is unlikely to solve this without new data or a
+new executable response surface. This is an action-space / positive-coverage
+problem, not just an unsafe-probability calibration problem.
+```
+
+Decision:
+
+```text
+Do not promote the cap2 strategy checkpoint.
+Do not promote either refreshed action critic.
+Do not change default runtime.
+Do not run PPO.
+
+The v2-schema refreshed critic is the stronger offline safety experiment:
+  original-data selected threshold=0.800 fallback=first-executable
+  accept_positive_match=7/13
+  fallback_rows=1
+  unsafe_fallback_rows=0
+
+But both refreshed critics still hold on online smoke v2:
+  predicted_matches_action_space_exhausted_labels
+  action_critic_all_executable_candidates_vetoed
+```
+
+Next work:
+
+```text
+Keep online smoke v2 as a regression surface.
+Collect or construct positive threat-state rows where non-STAY actions are
+executable and produce payoff before late all-candidates-vetoed states.
+Prioritize TECH_ROBO, PRODUCE_ARMY, BUILD_STATIC_DEFENSE, BOOST_WORKERS,
+EXPAND, and ADD_GATEWAYS under Hard Terran Power pressure.
+Consider a narrowly scoped emergency-response action or executor path only
+after offline replay shows it is executable and bounded.
+Do not spend the next cycle only tuning action-critic thresholds.
+```
+
+## 2026-06-30 Threat-Positive Teacher Batch Follow-Up
+
+Scope:
+
+```text
+Collect targeted teacher data for Hard Terran Power/Air threat states.
+No PPO.
+No default runtime change.
+No checkpoint promotion.
+Keep tactic-rule off.
+```
+
+Collection:
+
+```text
+run:
+  runs\20260630_155608_strategy_threat_positive_teacher_batch_v1
+strategy trajectories:
+  data\trajectories\strategy_threat_positive_teacher_batch_strategy_v1
+army trajectories:
+  data\trajectories\strategy_threat_positive_teacher_batch_army_v1
+
+grid:
+  maps: AcropolisLE, ThunderbirdLE
+  difficulty: Hard
+  opponent: Terran
+  ai_builds: Power, Air
+  games_per_combo: 1
+  game_time_limit: 700
+  army_policy: coverage-teacher
+  strategy_policy: coverage-teacher
+  strategy_tactic_mode: off
+
+results:
+  AcropolisLE Power: Tie
+  AcropolisLE Air: Tie
+  ThunderbirdLE Power: Tie
+  ThunderbirdLE Air: Tie
+  all return_code=0
+```
+
+Readiness:
+
+```text
+artifact:
+  runs\20260630_155608_strategy_threat_positive_teacher_batch_v1\artifacts\strategy_data_readiness_threat_positive_teacher_batch_v1_summary.json
+
+recommendation: train
+training_ready: true
+trajectory_detail_gate: ready
+policy_explanation_gate: ready
+observation_detail_gate: ready
+```
+
+Signal summary:
+
+```text
+artifact:
+  runs\20260630_155608_strategy_threat_positive_teacher_batch_v1\artifacts\strategy_signal_dataset_recorded_only_threat_positive_teacher_batch_v1.json
+
+rows: 248
+accept_positive: 16
+drop_ambiguous: 150
+drop_non_executable: 81
+veto_negative: 1
+
+accept_positive actions:
+  ADD_GATEWAYS=4
+  BUILD_STATIC_DEFENSE=4
+  FORGE_UPGRADES=3
+  PRODUCE_ARMY=3
+  TECH_ROBO=2
+
+threat-state accept_positive:
+  BUILD_STATIC_DEFENSE / ground_threat = 3
+  BUILD_STATIC_DEFENSE / air_threat = 1
+```
+
+Action-space and emergency analysis:
+
+```text
+action-space artifact:
+  runs\20260630_155608_strategy_threat_positive_teacher_batch_v1\artifacts\strategy_action_space_threat_positive_teacher_batch_v1.json
+
+emergency artifact:
+  runs\20260630_155608_strategy_threat_positive_teacher_batch_v1\artifacts\strategy_emergency_actions_threat_positive_teacher_batch_v1.json
+
+only_stay_course=96/248
+only_stay_course_under_threat=7/248
+action_space_exhausted=0/7 threatened only-STAY rows
+EMERGENCY_DEFEND addressable threatened only-STAY=4/7
+unaddressed threatened only-STAY=3/7
+unaddressed reason:
+  no_observed_anti_air_assets=3
+```
+
+New imitation candidates:
+
+```text
+cap2 trainable:
+  run: runs\20260630_160130_strategy_imitation_fresh_plus_threat_teacher_cap2_v1
+  checkpoint:
+    runs\20260630_160130_strategy_imitation_fresh_plus_threat_teacher_cap2_v1\checkpoints\policy.pt
+  examples: 87
+  kept_by_training_use:
+    accept_positive=29
+    drop_ambiguous=58
+  train_accuracy: 0.471
+  validation_accuracy: 0.353
+
+strict-positive:
+  run: runs\20260630_160253_strategy_imitation_fresh_plus_threat_teacher_strict_positive_v1
+  checkpoint:
+    runs\20260630_160253_strategy_imitation_fresh_plus_threat_teacher_strict_positive_v1\checkpoints\policy.pt
+  examples: 29
+  kept_by_training_use:
+    accept_positive=29
+  train_accuracy: 0.870
+  validation_accuracy: 0.500
+```
+
+Offline sweeps used:
+
+```text
+critic:
+  runs\20260630_154556_strategy_action_critic_combined_plus_online_smoke_v2_trainable_schema_v2_v1\checkpoints\critic.pt
+```
+
+Fresh+teacher training surface:
+
+```text
+cap2:
+  artifact:
+    runs\20260630_160130_strategy_imitation_fresh_plus_threat_teacher_cap2_v1\artifacts\action_critic_threshold_sweep_v2_critic_on_fresh_plus_threat_teacher.json
+  recommendation: promotion_candidate
+  selected: threshold=0.800 fallback=first-executable
+  accept_positive_match=17/29
+  veto_negative_match=0/4
+  drop_non_executable_match=0/405
+  fallback_rows=1
+  unsafe_fallback_rows=0
+
+strict-positive:
+  artifact:
+    runs\20260630_160253_strategy_imitation_fresh_plus_threat_teacher_strict_positive_v1\artifacts\action_critic_threshold_sweep_v2_critic_on_fresh_plus_threat_teacher.json
+  recommendation: promotion_candidate
+  selected: threshold=0.800 fallback=first-executable
+  accept_positive_match=16/29
+  veto_negative_match=0/4
+  drop_non_executable_match=0/405
+  fallback_rows=1
+  unsafe_fallback_rows=0
+```
+
+Online smoke v2 regression surface:
+
+```text
+cap2:
+  artifact:
+    runs\20260630_160130_strategy_imitation_fresh_plus_threat_teacher_cap2_v1\artifacts\action_critic_threshold_sweep_v2_critic_on_online_smoke_v2.json
+  recommendation: hold
+  selected: threshold=0.200 fallback=first-executable
+  blocking_reasons:
+    predicted_matches_action_space_exhausted_labels
+    action_critic_all_executable_candidates_vetoed
+  accept_positive_match=2/5
+  fallback_rows=8
+  unsafe_fallback_rows=8
+
+strict-positive:
+  artifact:
+    runs\20260630_160253_strategy_imitation_fresh_plus_threat_teacher_strict_positive_v1\artifacts\action_critic_threshold_sweep_v2_critic_on_online_smoke_v2.json
+  recommendation: hold
+  selected: threshold=0.200 fallback=rule-safe
+  blocking_reasons:
+    predicted_matches_action_space_exhausted_labels
+    action_critic_all_executable_candidates_vetoed
+  accept_positive_match=3/5
+  fallback_rows=8
+  unsafe_fallback_rows=8
+  note: threshold=0.400 can reach accept_positive_match=4/5, but still holds
+        on the same action-space/fallback blockers.
+```
+
+Interpretation:
+
+```text
+The focused teacher batch is useful data: it more than doubles accept_positive
+coverage in the combined fresh dataset and adds threat-state BUILD_STATIC_DEFENSE
+positives.
+
+It does not solve the real online blocker. The remaining online smoke failure is
+late air-and-ground threat with no anti-air assets, not merely a lack of generic
+static-defense positives. The new candidates still hit:
+  predicted_matches_action_space_exhausted_labels
+  action_critic_all_executable_candidates_vetoed
+```
+
+Decision:
+
+```text
+Do not promote either new imitation checkpoint.
+Do not promote the refreshed critic.
+Do not change default runtime.
+Do not run PPO.
+```
+
+Next work:
+
+```text
+Target anti-air recovery specifically.
+Collect or construct examples where the bot preserves or rebuilds anti-air
+assets before late air-and-ground threat:
+  stalker/sentry/cannon present while threat starts
+  PRODUCE_ARMY or BUILD_STATIC_DEFENSE executable with payoff
+  no transition into only-STAY_COURSE action-space exhaustion
+
+Do not run another imitation training job from the same data until this missing
+anti-air recovery surface exists.
+```
+
+Anti-air recovery diagnostic:
+
+```text
+Implemented:
+  rl\strategy_anti_air_recovery_analysis.py
+  scripts\analyze_strategy_anti_air_recovery.py
+  tests\test_strategy_anti_air_recovery_analysis.py
+
+Purpose:
+  Offline-only analysis of whether an air-threat/no-anti-air gap was preceded
+  by executable recovery actions (PRODUCE_ARMY, BUILD_STATIC_DEFENSE, TECH_ROBO)
+  and whether any such action was actually selected before the gap.
+
+Online smoke v2 artifact:
+  runs\20260630_153145_strategy_checkpoint_cap2_critic_t095_first_exec_online_smoke_runtime_aligned_v2\artifacts\strategy_anti_air_recovery_online_smoke_v2.json
+  runs\20260630_153145_strategy_checkpoint_cap2_critic_t095_first_exec_online_smoke_runtime_aligned_v2\artifacts\strategy_anti_air_recovery_online_smoke_v2.txt
+
+Online smoke v2 findings:
+  files: 2
+  air_threat_rows: 8/124
+  air_threat_rows_without_anti_air: 5/8
+  anti_air_gap_files: 2/2
+  files_with_pre_gap_recovery_window: 2/2
+  files_with_pre_gap_executable_recovery_selected: 1/2
+  missed_recovery_windows: 1/2
+  recovery_executable_counts:
+    PRODUCE_ARMY=24
+    BUILD_STATIC_DEFENSE=24
+    TECH_ROBO=53
+  selected executable recovery:
+    BUILD_STATIC_DEFENSE=2
+
+Critical file:
+  20260630_153145_AcropolisLE_Hard_Terran_Power_001.jsonl
+  first air/no-anti-air gap at 651.4s
+  last anti-air asset before gap at 537.1s
+  pre-gap executable recovery existed but no executable recovery action was
+  selected before the gap, so this is a real missed-window example.
+
+Threat-positive teacher artifact:
+  runs\20260630_155608_strategy_threat_positive_teacher_batch_v1\artifacts\strategy_anti_air_recovery_threat_positive_teacher_batch_v1.json
+  runs\20260630_155608_strategy_threat_positive_teacher_batch_v1\artifacts\strategy_anti_air_recovery_threat_positive_teacher_batch_v1.txt
+
+Threat-positive teacher findings:
+  files: 4
+  air_threat_rows: 7/248
+  air_threat_rows_without_anti_air: 4/7
+  anti_air_gap_files: 2/4
+  files_with_pre_gap_recovery_window: 2/2
+  files_with_pre_gap_executable_recovery_selected: 2/2
+  missed_recovery_windows: 0/2
+
+Decision:
+  The next useful data is not another generic threat-positive batch. It should
+  target the online-smoke Acropolis failure shape: executable recovery options
+  existed before anti-air disappeared, but the policy did not take an executable
+  recovery action soon enough.
+```
+
+## 2026-06-30 Fresh Strategy Metadata Training Loop
+
+Scope:
+
+```text
+Move from old untrainable strategy data to a small fresh strategy dataset with
+current metadata, then run the hard training trigger and checkpoint audits.
+Keep default runtime unchanged:
+  --strategy-policy rule
+  --strategy-tactic-mode off
+```
+
+Fresh guarded collection:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\evaluate.py --maps AcropolisLE --difficulties Hard --opponents Terran --ai-builds Rush Power Air --games-per-combo 1 --run-root runs --run-name strategy_fresh_metadata_batch_v1 --policy-name strategy_fresh_metadata_batch_v1 --army-policy rule --strategy-policy coverage-teacher --strategy-tactic-mode off --trajectory-dir data\trajectories\strategy_fresh_metadata_batch_army_v1 --strategy-trajectory-dir data\trajectories\strategy_fresh_metadata_batch_strategy_v1 --record-decision-interval 16 --game-time-limit 700 --guard-interval 0.02 --hide-watch-seconds 120 --hide-watch-interval 0.02
+```
+
+Results:
+
+```text
+runs\20260630_095925_strategy_fresh_metadata_batch_v1
+data\trajectories\strategy_fresh_metadata_batch_strategy_v1
+
+Hard Terran Rush:  Defeat, return_code=0, 62 rows
+Hard Terran Power: Tie,    return_code=0, 63 rows
+Hard Terran Air:   Tie,    return_code=0, 63 rows
+
+total rows: 188
+non-terminal signal rows used by audits: 185
+```
+
+The new rows include current metadata:
+
+```text
+strategy_observation_details
+strategy_policy_source
+strategy_policy_reason
+strategy_execution_attempted/effect/blocker/unit_type/target
+```
+
+Readiness pipeline:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_strategy_data_readiness_pipeline.py data\trajectories\strategy_fresh_metadata_batch_strategy_v1 --output-dir runs\20260630_095925_strategy_fresh_metadata_batch_v1\artifacts --prefix strategy_data_readiness_fresh_metadata_batch_v1 --text-output runs\20260630_095925_strategy_fresh_metadata_batch_v1\artifacts\strategy_data_readiness_fresh_metadata_batch_v1.txt --fail-on-hold
+```
+
+Result:
+
+```text
+recommendation: train
+training_ready: true
+trajectory_detail_gate: ready
+policy_explanation_gate: ready
+observation_detail_gate: ready
+promotion_ready: unchecked
+blocking_reasons: <none>
+```
+
+Candidate training:
+
+```text
+trainable-filter imitation:
+  run: runs\20260630_100315_strategy_imitation_fresh_metadata_candidate_v1
+  examples: 87
+  train accuracy: 0.500
+  validation accuracy: 0.353
+  checkpoint: runs\20260630_100315_strategy_imitation_fresh_metadata_candidate_v1\checkpoints\policy.pt
+
+strict-positive imitation:
+  run: runs\20260630_100437_strategy_imitation_fresh_metadata_strict_positive_v1
+  examples: 11
+  train accuracy: 1.000
+  validation accuracy: 0.000
+  checkpoint: runs\20260630_100437_strategy_imitation_fresh_metadata_strict_positive_v1\checkpoints\policy.pt
+```
+
+Imitation audit summary:
+
+```text
+trainable-filter raw:
+  signal_healthy=false
+  predicted_non_executable=72/185 ratio=0.389
+  drop_non_executable_match=7/97
+
+trainable-filter executable-mask:
+  signal_healthy=false
+  predicted_non_executable=0/185
+  drop_non_executable_match=5/97
+
+trainable-filter signal-risk-mask:
+  signal_healthy=true
+  predicted_non_executable=0/185
+  drop_non_executable_match=0/97
+  veto_negative_match=0/1
+  accept_positive_match=3/11
+  predicted_action_counts: STAY_COURSE=172, FORGE_UPGRADES=12, BUILD_STATIC_DEFENSE=1
+
+strict-positive raw:
+  signal_healthy=false
+  predicted_non_executable=140/185 ratio=0.757
+  veto_negative_match=1/1
+  drop_non_executable_match=8/97
+
+strict-positive signal-risk-mask:
+  signal_healthy=false
+  predicted_non_executable=0/185
+  veto_negative_match=1/1
+  drop_non_executable_match=0/97
+```
+
+Fresh action critics:
+
+```text
+trainable critic:
+  run: runs\20260630_100545_strategy_action_critic_fresh_metadata_trainable_v1
+  examples: 185
+  unsafe examples: 98
+  validation accuracy/precision/recall: 0.919 / 0.909 / 0.952
+  checkpoint: runs\20260630_100545_strategy_action_critic_fresh_metadata_trainable_v1\checkpoints\critic.pt
+
+conservative critic:
+  run: runs\20260630_100545_strategy_action_critic_fresh_metadata_conservative_v1
+  examples: 109
+  unsafe examples: 98
+  validation accuracy/precision/recall: 1.000 / 1.000 / 1.000
+  checkpoint: runs\20260630_100545_strategy_action_critic_fresh_metadata_conservative_v1\checkpoints\critic.pt
+```
+
+Action-critic-mask audit summary:
+
+```text
+trainable-filter imitation + trainable critic:
+  signal_healthy=false
+  predicted_non_executable=0/185
+  veto_negative_match=0/1
+  drop_non_executable_match=0/97
+  action_critic_fallback_rows=31
+  accept_positive_match=4/11
+  predicted_action_counts: STAY_COURSE=178, FORGE_UPGRADES=6, BUILD_STATIC_DEFENSE=1
+
+strict-positive imitation + trainable critic:
+  signal_healthy=false
+  predicted_non_executable=0/185
+  veto_negative_match=0/1
+  drop_non_executable_match=0/97
+  action_critic_fallback_rows=31
+  accept_positive_match=6/11
+  predicted_action_counts: STAY_COURSE=158, FORGE_UPGRADES=19, BUILD_STATIC_DEFENSE=5, PRODUCE_ARMY=3
+
+conservative critic masks are currently too broad:
+  action_critic_fallback_rows=150 in both audited imitation checkpoints
+```
+
+Decision:
+
+```text
+The fresh metadata collection path is now proven: new strategy data can pass the
+readiness pipeline and trigger candidate training.
+
+Do not promote either fresh imitation checkpoint.
+Do not run online checkpoint eval yet.
+Do not change default runtime.
+
+The trainable-filter imitation is too dominated by ambiguous STAY_COURSE rows.
+The strict-positive imitation learns payoff actions better, but is tiny and
+unsafe without heavy masking. The trainable action critic is useful as a guard,
+but current action-critic-mask still falls back too often and collapses toward
+STAY_COURSE.
+```
+
+Next work:
+
+```text
+Collect a larger fresh strategy dataset with current metadata, preferably across
+Hard Terran Rush/Timing/Power/Macro/Air and at least two maps or repeated seeds.
+Target enough accept_positive rows for TECH_ROBO, ADD_GATEWAYS,
+BUILD_STATIC_DEFENSE, PRODUCE_ARMY, EXPAND, and BOOST_WORKERS.
+
+Then retrain:
+  strategy imitation with stricter positive/ambiguous balancing
+  action critic with calibrated threshold sweep
+
+Only consider a small online checkpoint eval after:
+  predicted_non_executable=0
+  veto/drop matches=0
+  action_critic_fallback_rows is low
+  accept_positive_match improves without STAY_COURSE collapse
+```
+
+## 2026-06-30 Fresh Strategy Metadata Batch v2
+
+Scope:
+
+```text
+Continue the fresh metadata training loop after v1 proved the pipeline but did
+not produce a promotable checkpoint.
+
+Keep default runtime unchanged:
+  --strategy-policy rule
+  --strategy-tactic-mode off
+
+Use coverage-teacher only for explicit data collection.
+No PPO.
+No online checkpoint eval.
+```
+
+Pre-checks:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\check_env.py
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+Results:
+
+```text
+check_env: OK
+pytest: 313 passed in 17.95s
+```
+
+Safety:
+
+```powershell
+.\.venv\Scripts\python.exe -c "from scripts.safe_launch import ensure_guard_running, find_existing_guard; ensure_guard_running(0.02); print(find_existing_guard())"
+Get-Process SC2,SC2_x64 -ErrorAction SilentlyContinue
+```
+
+Result:
+
+```text
+guard pid: 15352
+no SC2 process before launch
+```
+
+Fresh guarded collection:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\evaluate.py --maps AcropolisLE ThunderbirdLE --difficulties Hard --opponents Terran --ai-builds Rush Timing Power Macro Air --games-per-combo 1 --run-root runs --run-name strategy_fresh_metadata_batch_v2 --policy-name strategy_fresh_metadata_batch_v2 --army-policy rule --strategy-policy coverage-teacher --strategy-tactic-mode off --trajectory-dir data\trajectories\strategy_fresh_metadata_batch_army_v2 --strategy-trajectory-dir data\trajectories\strategy_fresh_metadata_batch_strategy_v2 --record-decision-interval 16 --game-time-limit 700 --guard-interval 0.02 --hide-watch-seconds 120 --hide-watch-interval 0.02
+```
+
+Artifacts:
+
+```text
+runs\20260630_143709_strategy_fresh_metadata_batch_v2
+runs\20260630_143709_strategy_fresh_metadata_batch_v2\artifacts\eval.jsonl
+data\trajectories\strategy_fresh_metadata_batch_strategy_v2
+data\trajectories\strategy_fresh_metadata_batch_army_v2
+```
+
+Eval summary:
+
+```text
+10 games, all return_code=0
+4 Victory / 2 Defeat / 4 Tie
+
+AcropolisLE Hard Terran:
+  Rush:   Victory
+  Timing: Victory
+  Power:  Defeat
+  Macro:  Tie
+  Air:    Tie
+
+ThunderbirdLE Hard Terran:
+  Rush:   Victory
+  Timing: Victory
+  Power:  Defeat
+  Macro:  Tie
+  Air:    Tie
+```
+
+Readiness pipeline:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_strategy_data_readiness_pipeline.py data\trajectories\strategy_fresh_metadata_batch_strategy_v2 --output-dir runs\20260630_143709_strategy_fresh_metadata_batch_v2\artifacts --prefix strategy_data_readiness_fresh_metadata_batch_v2 --text-output runs\20260630_143709_strategy_fresh_metadata_batch_v2\artifacts\strategy_data_readiness_fresh_metadata_batch_v2.txt --fail-on-hold
+```
+
+Result:
+
+```text
+recommendation: train
+training_ready: true
+trajectory_detail_gate: ready
+policy_explanation_gate: ready
+observation_detail_gate: ready
+promotion_ready: unchecked
+blocking_reasons: <none>
+```
+
+Training:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_strategy_imitation.py data\trajectories\strategy_fresh_metadata_batch_strategy_v2 --run-root runs --run-name strategy_imitation_fresh_metadata_batch_v2_trainable --epochs 5 --batch-size 64 --class-weighting balanced --signal-filter trainable --observation-detail-gate runs\20260630_143709_strategy_fresh_metadata_batch_v2\artifacts\strategy_data_readiness_fresh_metadata_batch_v2_observation_detail_gate.json
+
+.\.venv\Scripts\python.exe scripts\train_strategy_imitation.py data\trajectories\strategy_fresh_metadata_batch_strategy_v2 --run-root runs --run-name strategy_imitation_fresh_metadata_batch_v2_strict_positive --epochs 30 --batch-size 16 --class-weighting balanced --signal-filter strict-positive --observation-detail-gate runs\20260630_143709_strategy_fresh_metadata_batch_v2\artifacts\strategy_data_readiness_fresh_metadata_batch_v2_observation_detail_gate.json
+
+.\.venv\Scripts\python.exe scripts\train_strategy_action_critic.py data\trajectories\strategy_fresh_metadata_batch_strategy_v2 --run-root runs --run-name strategy_action_critic_fresh_metadata_batch_v2_trainable --epochs 30 --batch-size 32 --class-weighting balanced --label-policy trainable --observation-detail-gate runs\20260630_143709_strategy_fresh_metadata_batch_v2\artifacts\strategy_data_readiness_fresh_metadata_batch_v2_observation_detail_gate.json
+
+.\.venv\Scripts\python.exe scripts\train_strategy_action_critic.py data\trajectories\strategy_fresh_metadata_batch_strategy_v2 --run-root runs --run-name strategy_action_critic_fresh_metadata_batch_v2_conservative --epochs 30 --batch-size 32 --class-weighting balanced --label-policy conservative --observation-detail-gate runs\20260630_143709_strategy_fresh_metadata_batch_v2\artifacts\strategy_data_readiness_fresh_metadata_batch_v2_observation_detail_gate.json
+```
+
+Training results:
+
+```text
+trainable-filter imitation:
+  run: runs\20260630_144517_strategy_imitation_fresh_metadata_batch_v2_trainable
+  examples: 285
+  train accuracy: 0.996
+  validation accuracy: 0.982
+  checkpoint: runs\20260630_144517_strategy_imitation_fresh_metadata_batch_v2_trainable\checkpoints\policy.pt
+
+strict-positive imitation:
+  run: runs\20260630_144517_strategy_imitation_fresh_metadata_batch_v2_strict_positive
+  examples: 2
+  train accuracy: 1.000
+  validation accuracy: 1.000
+  checkpoint: runs\20260630_144517_strategy_imitation_fresh_metadata_batch_v2_strict_positive\checkpoints\policy.pt
+
+trainable action critic:
+  run: runs\20260630_144517_strategy_action_critic_fresh_metadata_batch_v2_trainable
+  examples: 514
+  unsafe examples: 229
+  validation accuracy/precision/recall: 0.990 / 0.977 / 1.000
+  checkpoint: runs\20260630_144517_strategy_action_critic_fresh_metadata_batch_v2_trainable\checkpoints\critic.pt
+
+conservative action critic:
+  run: runs\20260630_144517_strategy_action_critic_fresh_metadata_batch_v2_conservative
+  examples: 231
+  unsafe examples: 229
+  validation accuracy/precision/recall: 0.957 / 1.000 / 0.957
+  checkpoint: runs\20260630_144517_strategy_action_critic_fresh_metadata_batch_v2_conservative\checkpoints\critic.pt
+```
+
+Checkpoint audit summary:
+
+```text
+Audited rows: 514
+recorded_training_use:
+  accept_positive=2
+  drop_ambiguous=283
+  drop_non_executable=227
+  veto_negative=2
+
+trainable-filter imitation raw / executable-mask / signal-risk-mask:
+  signal_healthy=true
+  predicted_non_executable=0/514
+  veto_negative_match=0/2
+  drop_non_executable_match=0/227
+  accept_positive_match=0/2
+  predicted_action_counts: STAY_COURSE=514
+
+trainable-filter imitation + trainable critic @0.4:
+  signal_healthy=false
+  blocking_reasons: action_critic_all_executable_candidates_vetoed
+  action_critic_fallback_rows=64
+  predicted_action_counts: STAY_COURSE=514
+
+strict-positive imitation raw:
+  signal_healthy=false
+  blocking_reasons:
+    predicted_non_executable_ratio_high
+    predicted_matches_veto_negative_labels
+    predicted_matches_drop_non_executable_labels
+  predicted_non_executable=467/514 ratio=0.909
+  accept_positive_match=2/2
+  veto_negative_match=2/2
+  drop_non_executable_match=31/227
+  predicted_action_counts: PRODUCE_ARMY=514
+
+strict-positive imitation signal-risk-mask:
+  signal_healthy=true
+  predicted_non_executable=0/514
+  accept_positive_match=0/2
+  veto_negative_match=0/2
+  drop_non_executable_match=0/227
+  predicted_action_counts:
+    STAY_COURSE=444
+    BUILD_STATIC_DEFENSE=39
+    TECH_ROBO=13
+    BOOST_WORKERS=12
+    PRODUCE_ARMY=6
+
+strict-positive imitation + trainable critic @0.4:
+  signal_healthy=false
+  blocking_reasons: action_critic_all_executable_candidates_vetoed
+  action_critic_fallback_rows=64
+  accept_positive_match=1/2
+  predicted_action_counts: STAY_COURSE=498, PRODUCE_ARMY=16
+```
+
+Threshold sweep:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\sweep_strategy_action_critic_thresholds.py data\trajectories\strategy_fresh_metadata_batch_strategy_v2 --checkpoint <policy.pt> --action-critic-checkpoint runs\20260630_144517_strategy_action_critic_fresh_metadata_batch_v2_trainable\checkpoints\critic.pt --thresholds 0.2 0.4 0.6 0.8 0.95 --fallback-policies lowest-risk signal-risk first-executable rule-safe threat-risk mixed-threat-risk --json-output <artifacts>\action_critic_threshold_sweep_trainable_critic.json --text-output <artifacts>\action_critic_threshold_sweep_trainable_critic.txt
+```
+
+Sweep results:
+
+```text
+trainable-filter imitation:
+  recommendation: hold
+  selected: threshold=0.950 fallback=first-executable
+  fallback_rows=42
+  accept_positive_match=0/2
+  blocking_reasons: action_critic_all_executable_candidates_vetoed
+
+strict-positive imitation:
+  recommendation: hold
+  selected: threshold=0.950 fallback=first-executable
+  fallback_rows=42
+  accept_positive_match=2/2
+  blocking_reasons: action_critic_all_executable_candidates_vetoed
+```
+
+Decision:
+
+```text
+Do not promote either v2 imitation checkpoint.
+Do not run online checkpoint eval yet.
+Do not change default runtime.
+Do not start PPO.
+
+The larger v2 collection improved row count and critic quality, but not policy
+quality. The trainable-filter checkpoint learned the safe majority class and
+collapses to STAY_COURSE. The strict-positive checkpoint has too little positive
+data and collapses to PRODUCE_ARMY before masking.
+
+The real bottleneck is accept_positive coverage and ambiguous-label dominance,
+not readiness metadata or training infrastructure.
+```
+
+Next work:
+
+```text
+Collect or construct data that specifically increases accept_positive rows,
+especially for Hard Terran Power losses and for:
+  TECH_ROBO
+  ADD_GATEWAYS
+  BUILD_STATIC_DEFENSE
+  PRODUCE_ARMY
+  EXPAND
+  BOOST_WORKERS
+
+Before another online eval, retrain with stronger positive/ambiguous balancing
+or a sampler/objective that prevents STAY_COURSE collapse, then require:
+  predicted_non_executable=0
+  veto/drop matches=0
+  accept_positive_match > 0
+  action_critic_fallback_rows low enough to avoid critic-driven policy collapse
+```
+
+## 2026-06-30 Ambiguous-Capped Strategy Imitation
+
+Scope:
+
+```text
+Continue from the v2 hold decision.
+Do not collect more SC2 games in this cycle.
+No online checkpoint eval.
+No default runtime change.
+No PPO.
+
+Implement a training-data control that prevents drop_ambiguous / STAY_COURSE
+rows from dominating trainable strategy imitation.
+```
+
+Implemented:
+
+```text
+rl\strategy_filtered_datasets.py
+  load_signal_filtered_strategy_trajectory_dataset now accepts
+  max_drop_ambiguous_per_positive and balance_seed.
+  It caps drop_ambiguous rows to a deterministic multiple of accept_positive
+  rows and records balance counts in StrategySignalFilterSummary.
+
+rl\strategy_imitation.py
+  StrategyImitationTrainConfig now carries max_drop_ambiguous_per_positive.
+
+scripts\train_strategy_imitation.py
+  New CLI option:
+    --max-drop-ambiguous-per-positive <float>
+
+tests\test_strategy_filtered_datasets.py
+tests\test_strategy_imitation.py
+  Added unit coverage for the cap and training summary plumbing.
+```
+
+Validation:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_strategy_filtered_datasets.py tests\test_strategy_imitation.py -q
+.\.venv\Scripts\python.exe -m pytest -q
+Get-Process SC2,SC2_x64 -ErrorAction SilentlyContinue
+```
+
+Results:
+
+```text
+ambiguous-cap targeted tests: 11 passed
+executor-aligned targeted tests: 22 passed
+runtime-mask targeted tests: 39 passed
+full tests: 323 passed
+SC2 process check: no process output
+```
+
+Combined readiness:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_strategy_data_readiness_pipeline.py data\trajectories\strategy_fresh_metadata_batch_strategy_v1 data\trajectories\strategy_fresh_metadata_batch_strategy_v2 --output-dir runs\20260630_strategy_fresh_metadata_combined_v1\artifacts --prefix strategy_data_readiness_fresh_metadata_combined_v1 --text-output runs\20260630_strategy_fresh_metadata_combined_v1\artifacts\strategy_data_readiness_fresh_metadata_combined_v1.txt --fail-on-hold
+```
+
+Result:
+
+```text
+recommendation: train
+training_ready: true
+trajectory_detail_gate: ready
+policy_explanation_gate: ready
+observation_detail_gate: ready
+inputs:
+  data\trajectories\strategy_fresh_metadata_batch_strategy_v1
+  data\trajectories\strategy_fresh_metadata_batch_strategy_v2
+```
+
+Combined candidate training:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_strategy_imitation.py data\trajectories\strategy_fresh_metadata_batch_strategy_v1 data\trajectories\strategy_fresh_metadata_batch_strategy_v2 --run-root runs --run-name strategy_imitation_fresh_metadata_combined_cap2_v1 --epochs 30 --batch-size 16 --class-weighting balanced --signal-filter trainable --max-drop-ambiguous-per-positive 2.0 --observation-detail-gate runs\20260630_strategy_fresh_metadata_combined_v1\artifacts\strategy_data_readiness_fresh_metadata_combined_v1_observation_detail_gate.json
+
+.\.venv\Scripts\python.exe scripts\train_strategy_imitation.py data\trajectories\strategy_fresh_metadata_batch_strategy_v1 data\trajectories\strategy_fresh_metadata_batch_strategy_v2 --run-root runs --run-name strategy_imitation_fresh_metadata_combined_cap0_v1 --epochs 30 --batch-size 16 --class-weighting balanced --signal-filter trainable --max-drop-ambiguous-per-positive 0.0 --observation-detail-gate runs\20260630_strategy_fresh_metadata_combined_v1\artifacts\strategy_data_readiness_fresh_metadata_combined_v1_observation_detail_gate.json
+```
+
+Training results:
+
+```text
+cap2 trainable imitation:
+  run: runs\20260630_145606_strategy_imitation_fresh_metadata_combined_cap2_v1
+  examples: 39
+  kept_by_training_use: accept_positive=13, drop_ambiguous=26
+  drop_ambiguous before balance: 359
+  drop_ambiguous removed by balance: 333
+  actions: STAY_COURSE=26, ADD_GATEWAYS=4, FORGE_UPGRADES=3,
+           BUILD_STATIC_DEFENSE=3, PRODUCE_ARMY=3
+  train accuracy: 0.871
+  validation accuracy: 0.625
+
+cap0 trainable imitation:
+  run: runs\20260630_145606_strategy_imitation_fresh_metadata_combined_cap0_v1
+  examples: 13
+  kept_by_training_use: accept_positive=13
+  drop_ambiguous before balance: 359
+  drop_ambiguous removed by balance: 359
+  actions: ADD_GATEWAYS=4, FORGE_UPGRADES=3,
+           BUILD_STATIC_DEFENSE=3, PRODUCE_ARMY=3
+  train accuracy: 1.000
+  validation accuracy: 0.667
+```
+
+Combined action critics:
+
+```text
+trainable v1-schema critic:
+  run: runs\20260630_145624_strategy_action_critic_fresh_metadata_combined_trainable_v1
+  examples: 699
+  unsafe examples: 327
+  validation accuracy/precision/recall: 0.986 / 0.983 / 0.983
+
+trainable v2-schema critic:
+  run: runs\20260630_145934_strategy_action_critic_fresh_metadata_combined_trainable_v2_schema
+  examples: 699
+  unsafe examples: 327
+  validation accuracy/precision/recall: 0.986 / 0.983 / 0.983
+```
+
+Checkpoint audit summary:
+
+```text
+cap2 raw:
+  signal_healthy=false
+  predicted_non_executable=214/699 ratio=0.306
+  accept_positive_match=11/13
+  veto_negative_match=1/3
+  drop_non_executable_match=51/324
+  predicted_action_counts:
+    STAY_COURSE=448
+    FORGE_UPGRADES=70
+    BUILD_STATIC_DEFENSE=65
+    ADD_GATEWAYS=59
+    PRODUCE_ARMY=57
+
+cap2 signal-risk-mask:
+  signal_healthy=true
+  predicted_non_executable=0/699
+  veto_negative_match=0/3
+  drop_non_executable_match=0/324
+  accept_positive_match=2/13
+  predicted_action_counts: STAY_COURSE=678, BUILD_STATIC_DEFENSE=19,
+    FORGE_UPGRADES=2
+
+cap2 + trainable v1 action critic @0.4:
+  signal_healthy=false
+  blocking_reasons:
+    predicted_matches_drop_non_executable_labels
+    action_critic_all_executable_candidates_vetoed
+  predicted_non_executable=0/699
+  veto_negative_match=0/3
+  drop_non_executable_match=1/324
+  accept_positive_match=9/13
+  action_critic_fallback_rows=60
+  predicted_action_counts:
+    STAY_COURSE=672
+    FORGE_UPGRADES=14
+    BUILD_STATIC_DEFENSE=6
+    ADD_GATEWAYS=4
+    PRODUCE_ARMY=3
+
+cap0 raw:
+  signal_healthy=false
+  predicted_non_executable=611/699 ratio=0.874
+  accept_positive_match=12/13
+  veto_negative_match=3/3
+  drop_non_executable_match=61/324
+
+cap0 + trainable v1 action critic @0.4:
+  signal_healthy=false
+  drop_non_executable_match=1/324
+  accept_positive_match=10/13
+  action_critic_fallback_rows=60
+
+cap2 + trainable v2-schema action critic @0.4:
+  signal_healthy=false
+  drop_non_executable_match=1/324
+  accept_positive_match=9/13
+  action_critic_fallback_rows=83
+```
+
+Threshold sweep:
+
+```text
+cap2 + trainable v1 critic:
+  recommendation: hold
+  selected: threshold=0.800 fallback=lowest-risk
+  accept_positive_match=11/13
+  predicted_non_executable=0
+  drop_non_executable_match=1/324
+  fallback_rows=38
+  blocking_reasons:
+    predicted_matches_drop_non_executable_labels
+    action_critic_all_executable_candidates_vetoed
+
+cap0 + trainable v1 critic:
+  recommendation: hold
+  selected: threshold=0.800 fallback=lowest-risk
+  accept_positive_match=12/13
+  predicted_non_executable=0
+  drop_non_executable_match=1/324
+  fallback_rows=38
+  blocking_reasons:
+    predicted_matches_drop_non_executable_labels
+    action_critic_all_executable_candidates_vetoed
+
+cap2 + trainable v2-schema critic:
+  recommendation: hold
+  selected: threshold=0.950 fallback=first-executable
+  accept_positive_match=11/13
+  predicted_non_executable=0
+  drop_non_executable_match=1/324
+  fallback_rows=51
+  blocking_reasons:
+    predicted_matches_drop_non_executable_labels
+    action_critic_all_executable_candidates_vetoed
+```
+
+Error inspection:
+
+```text
+The remaining drop_non_executable match in the cap2 + v1 critic audit is:
+  file: data\trajectories\strategy_fresh_metadata_batch_strategy_v1\20260630_100101_AcropolisLE_Hard_Terran_Air_001.jsonl
+  step: 2944
+  game_time: 525.7
+  recorded/predicted action: ADD_GATEWAYS
+  policy reason: gateway_count_below_target
+  execution effect/blocker: noop / target_gateways_reached
+  context/threat: other / no_threat
+  action critic unsafe probability: 0.162
+
+Fallback rows are mostly STAY_COURSE selected under threat after all executable
+candidates are vetoed:
+  ground_threat: 32
+  air_and_ground_threat: 19
+  no_threat: 8
+  air_threat: 1
+```
+
+Executor-aligned executability follow-up:
+
+```text
+Problem:
+  The one remaining ADD_GATEWAYS / target_gateways_reached bad match came from
+  an offline/online state mismatch. The offline candidate_executability check
+  counted ready_gateways + pending_gateways from strategy_observation
+  (6 + 1 = 7), while StrategyExecutor effectively sees structure_count(GATEWAY)
+  plus pending_gateways through army state (7 + 1 = 8). With 2 bases and a
+  4-gateway-per-base cap, the executor correctly blocked at 8/8.
+
+Implemented:
+  rl\strategy_outcome_diagnostics.py now carries numeric army_observation in
+  _StrategyOutcomeRow.
+  rl\strategy_replay_candidate.py now estimates ADD_GATEWAYS executor total
+  from max(strategy ready+pending, army_observation.gateways+pending).
+  tests\test_strategy_replay_candidate.py covers the ready=6/pending=1,
+  army_gateways=7 target_gateways_reached case.
+
+Validation:
+  .\.venv\Scripts\python.exe -m pytest tests\test_strategy_replay_candidate.py tests\test_strategy_checkpoint_signal_audit.py tests\test_strategy_action_critic_threshold_sweep.py -q
+  22 passed
+
+  .\.venv\Scripts\python.exe -m pytest -q
+  317 passed
+
+  git diff --check
+  only CRLF working-copy warnings
+
+  Get-Process SC2,SC2_x64 -ErrorAction SilentlyContinue
+  no process output
+
+Executor-aligned cap2 + trainable v1 critic @0.4 audit:
+  artifact: runs\20260630_145606_strategy_imitation_fresh_metadata_combined_cap2_v1\artifacts\checkpoint_signal_audit_action_critic_trainable_t04_executor_aligned.json
+  recommendation: hold
+  signal_healthy=false
+  blocking_reasons:
+    action_critic_all_executable_candidates_vetoed
+  predicted_non_executable=0/699
+  bad_recorded_match=0/327
+  veto_negative_match=0/3
+  drop_non_executable_match=0/324
+  accept_positive_match=9/13
+  action_critic_fallback_rows=60
+  raw blocker count includes target_gateways_reached=44
+
+Executor-aligned threshold sweep:
+  artifact: runs\20260630_145606_strategy_imitation_fresh_metadata_combined_cap2_v1\artifacts\action_critic_threshold_sweep_trainable_critic_executor_aligned.json
+  recommendation: hold
+  selected: threshold=0.950 fallback=first-executable
+  blocking_reasons:
+    action_critic_all_executable_candidates_vetoed
+  predicted_non_executable=0
+  veto_negative_match=0/3
+  drop_non_executable_match=0/324
+  accept_positive_match=11/13
+  fallback_rows=32
+
+Fallback rows after executor alignment:
+  31 ground_threat, drop_non_executable, BUILD_STATIC_DEFENSE -> STAY_COURSE
+  19 air_and_ground_threat, drop_non_executable, BUILD_STATIC_DEFENSE -> STAY_COURSE
+   6 no_threat, drop_non_executable, TECH_ROBO -> STAY_COURSE
+   2 no_threat, drop_non_executable, PRODUCE_ARMY -> STAY_COURSE
+   1 air_threat, drop_non_executable, BUILD_STATIC_DEFENSE -> STAY_COURSE
+   1 ground_threat, veto_negative, BUILD_STATIC_DEFENSE -> STAY_COURSE
+```
+
+Safe-fallback gate, runtime mask, and online smoke follow-up:
+
+```text
+Implemented:
+  rl\strategy_checkpoint_signal_audit.py now splits action critic fallback into:
+    action_critic_safe_fallback_rows
+    action_critic_unsafe_fallback_rows
+  Safe fallback is deliberately narrow:
+    selected action is executable STAY_COURSE
+    row is not accept_positive
+    row is bad/drop/veto/action_space related
+    prediction does not match a bad/veto/drop/action_space label
+
+  rl\strategy_action_critic_threshold_sweep.py now ranks/block-gates on
+  unsafe_fallback_rows while still reporting total fallback_rows.
+
+  bot\managers\rl_strategy_policy.py supports explicit opt-in runtime action
+  critic masking for --strategy-policy checkpoint.
+
+  run.py and scripts\evaluate.py expose:
+    --strategy-action-critic-checkpoint
+    --strategy-action-critic-threshold
+    --strategy-action-critic-fallback-policy lowest-risk|first-executable
+
+  rl\strategy_replay_candidate.py exposes candidate_executability_from_observation
+  for runtime reuse and aligns FORGE_UPGRADES with StrategyExecutor:
+    pending Forge is not executable
+    single ready Forge with an upgrade pending is treated as busy
+    completed/pending upgrades are blocked before executor noop
+
+Validation:
+  .\.venv\Scripts\python.exe -m pytest tests\test_strategy_replay_candidate.py tests\test_strategy_checkpoint_signal_audit.py tests\test_strategy_action_critic_threshold_sweep.py tests\test_rl_strategy_policy.py tests\test_evaluate.py -q
+  39 passed
+
+  .\.venv\Scripts\python.exe -m pytest -q
+  323 passed
+
+  .\.venv\Scripts\python.exe scripts\check_env.py
+  OK
+
+  git diff --check
+  only CRLF working-copy warnings
+
+  Get-Process SC2,SC2_x64 -ErrorAction SilentlyContinue
+  no process output
+
+Offline runtime-aligned audit:
+  artifact: runs\20260630_145606_strategy_imitation_fresh_metadata_combined_cap2_v1\artifacts\checkpoint_signal_audit_action_critic_trainable_t095_first_executable_runtime_aligned_v2.json
+  signal_healthy=true
+  blocking_reasons: <none>
+  predicted_non_executable=0/699
+  veto_negative_match=0/3
+  drop_non_executable_match=0/324
+  accept_positive_match=11/13
+  fallback_rows=32
+  safe_fallback_rows=32
+  unsafe_fallback_rows=0
+
+Offline runtime-aligned threshold sweep:
+  artifact: runs\20260630_145606_strategy_imitation_fresh_metadata_combined_cap2_v1\artifacts\action_critic_threshold_sweep_trainable_critic_runtime_aligned_v2.json
+  recommendation=promotion_candidate
+  selected threshold=0.950 fallback=first-executable
+  accept_positive_match=11/13
+  predicted_non_executable=0
+  veto/drop matches=0
+  fallback_rows=32
+  unsafe_fallback_rows=0
+
+Online smoke v1:
+  run: runs\20260630_152526_strategy_checkpoint_cap2_critic_t095_first_exec_online_smoke_v1
+  strategy trajectories: data\trajectories\strategy_checkpoint_cap2_critic_t095_first_exec_online_smoke_strategy_v1
+  grid: AcropolisLE + ThunderbirdLE, Hard Terran Power, 1 game each
+  result: 2 Tie, all return_code=0
+  finding: runtime mask launched and recorded correctly, but FORGE_UPGRADES
+  repeated executor noop / no_affordable_upgrade 11 times.
+
+Online smoke v2 after FORGE_UPGRADES runtime alignment:
+  run: runs\20260630_153145_strategy_checkpoint_cap2_critic_t095_first_exec_online_smoke_runtime_aligned_v2
+  strategy trajectories: data\trajectories\strategy_checkpoint_cap2_critic_t095_first_exec_online_smoke_runtime_aligned_strategy_v2
+  grid: AcropolisLE + ThunderbirdLE, Hard Terran Power, 1 game each
+  result: 2 Tie, all return_code=0
+  actions: STAY_COURSE=118, FORGE_UPGRADES=3, BUILD_STATIC_DEFENSE=3
+  executor effects:
+    STAY_COURSE noop=118
+    BUILD_STATIC_DEFENSE build_structure=3
+    FORGE_UPGRADES build_structure=2, research_upgrade=1
+  no repeated FORGE_UPGRADES executor noop remains.
+
+Online smoke v2 self-audit:
+  artifact: runs\20260630_153145_strategy_checkpoint_cap2_critic_t095_first_exec_online_smoke_runtime_aligned_v2\artifacts\checkpoint_signal_audit_online_smoke_strategy_t095_first_executable.json
+  signal_healthy=false
+  blocking_reasons:
+    predicted_matches_veto_negative_labels
+    predicted_matches_action_space_exhausted_labels
+    action_critic_all_executable_candidates_vetoed
+  accept_positive_match=3/5
+  veto_negative_match=4/4
+  drop_non_executable_match=0/1
+  action_space_exhausted_match=2/2
+  fallback_rows=41
+  safe_fallback_rows=1
+  unsafe_fallback_rows=40
+```
+
+Decision:
+
+```text
+Do not promote cap2 or cap0.
+Do not change default runtime.
+Do not run PPO.
+
+The new ambiguous cap is useful and should stay: it prevents trainable imitation
+from silently becoming a STAY_COURSE majority-class model, and it exposes the
+real positive-label shortage.
+
+The best current offline candidate is cap2 + trainable v1 action critic with
+threshold=0.950 and fallback=first-executable. It now passes the offline
+safe-fallback gate and can be run online through explicit opt-in runtime mask
+parameters.
+
+It is still not promotable. The online smoke runs tied both Hard Terran Power
+games and the runtime-aligned v2 run collapsed heavily to STAY_COURSE. The
+remaining blocker has moved from "offline non-executable/drop match" to "online
+threat/action-space rows still choose STAY_COURSE or unsafe fallback too often."
+```
+
+Next work:
+
+```text
+1. Treat online smoke v2 as the new regression surface.
+2. Reduce unsafe fallback and STAY_COURSE under active threat; do not promote a
+   policy that mostly no-ops through Hard Terran Power pressure.
+3. Add targeted positive coverage for TECH_ROBO, PRODUCE_ARMY, EXPAND, and
+   BOOST_WORKERS in Hard Terran Power games, not just safer FORGE/STATIC rows.
+4. Consider training/using the online smoke bad rows as critic/eval negatives,
+   but do not train a promoted policy directly from self-play bad labels without
+   a fresh comparison gate.
+5. Only consider a broader online checkpoint eval after:
+   online self-audit has no veto/action_space matches
+   unsafe_fallback_rows is near zero
+   non-STAY actions execute with useful payoff
+   Hard Terran Power improves beyond Tie
 ```
 
 ## 2026-06-25 Strategy Replay Candidate Diagnostics

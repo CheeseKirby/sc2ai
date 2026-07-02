@@ -14,6 +14,10 @@ from rl.strategy_imitation import (  # noqa: E402
     StrategyImitationTrainConfig,
     train_strategy_imitation_policy,
 )
+from rl.strategy_filtered_datasets import (  # noqa: E402
+    RECOVERY_ACCEPT_POSITIVE_CONTEXT_FILTERS,
+    SIGNAL_FILTER_PRESETS,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -53,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--signal-filter",
-        choices=["off", "strict-positive", "trainable"],
+        choices=["off", *sorted(SIGNAL_FILTER_PRESETS)],
         default="off",
         help=(
             "Optional row-level signal filter before strategy imitation training. "
@@ -70,7 +74,92 @@ def parse_args() -> argparse.Namespace:
             "Training fails before loading data unless the gate is ready=true."
         ),
     )
+    parser.add_argument(
+        "--max-drop-ambiguous-per-positive",
+        type=float,
+        default=None,
+        help=(
+            "When using a signal filter, cap drop_ambiguous rows to this "
+            "multiple of accept_positive rows. This is useful for preventing "
+            "STAY_COURSE-heavy ambiguous rows from dominating behavior cloning."
+        ),
+    )
+    parser.add_argument(
+        "--recovery-positive-oversample-factor",
+        type=int,
+        default=1,
+        help=(
+            "When using a signal filter, duplicate observed accept_positive "
+            "TECH_ROBO/PRODUCE_ARMY/BUILD_STATIC_DEFENSE examples this many "
+            "total times. The default 1 disables oversampling."
+        ),
+    )
+    parser.add_argument(
+        "--recovery-accept-positive-loss-weight",
+        type=float,
+        default=1.0,
+        help=(
+            "When using a signal filter, multiply the training loss for observed "
+            "accept_positive TECH_ROBO/PRODUCE_ARMY/BUILD_STATIC_DEFENSE rows by "
+            "this factor. The default 1.0 disables per-sample weighting."
+        ),
+    )
+    parser.add_argument(
+        "--recovery-accept-positive-action-loss-weight",
+        action="append",
+        default=[],
+        metavar="ACTION=WEIGHT",
+        help=(
+            "Override the recovery accept-positive loss weight for one action. "
+            "Example: BUILD_STATIC_DEFENSE=4. May be passed multiple times."
+        ),
+    )
+    parser.add_argument(
+        "--recovery-accept-positive-context-filter",
+        choices=RECOVERY_ACCEPT_POSITIVE_CONTEXT_FILTERS,
+        default="off",
+        help=(
+            "Optionally restrict recovery accept-positive weights to a "
+            "context-specific slice. The default off preserves existing "
+            "behavior."
+        ),
+    )
+    parser.add_argument(
+        "--recovery-accept-positive-context-oversample-factor",
+        type=int,
+        default=1,
+        help=(
+            "When using a recovery accept-positive context filter, duplicate "
+            "observed accept_positive recovery rows in that context this many "
+            "total times. The default 1 disables context oversampling."
+        ),
+    )
     return parser.parse_args()
+
+
+def _parse_action_loss_weights(values: list[str]) -> dict[str, float] | None:
+    if not values:
+        return None
+    parsed: dict[str, float] = {}
+    for raw_value in values:
+        if "=" not in raw_value:
+            raise SystemExit(
+                "--recovery-accept-positive-action-loss-weight expects ACTION=WEIGHT"
+            )
+        action_name, raw_weight = raw_value.split("=", 1)
+        action_name = action_name.strip()
+        if not action_name:
+            raise SystemExit(
+                "--recovery-accept-positive-action-loss-weight action is empty"
+            )
+        try:
+            weight = float(raw_weight)
+        except ValueError as exc:
+            raise SystemExit(
+                "--recovery-accept-positive-action-loss-weight weight must be numeric"
+            ) from exc
+        parsed[action_name] = weight
+    return parsed
 
 
 def main() -> int:
@@ -92,6 +181,22 @@ def main() -> int:
             str(args.observation_detail_gate)
             if args.observation_detail_gate is not None
             else None
+        ),
+        max_drop_ambiguous_per_positive=args.max_drop_ambiguous_per_positive,
+        recovery_positive_oversample_factor=args.recovery_positive_oversample_factor,
+        recovery_accept_positive_loss_weight=(
+            args.recovery_accept_positive_loss_weight
+        ),
+        recovery_accept_positive_action_loss_weights=(
+            _parse_action_loss_weights(
+                args.recovery_accept_positive_action_loss_weight
+            )
+        ),
+        recovery_accept_positive_context_filter=(
+            args.recovery_accept_positive_context_filter
+        ),
+        recovery_accept_positive_context_oversample_factor=(
+            args.recovery_accept_positive_context_oversample_factor
         ),
     )
     run = create_experiment_run(

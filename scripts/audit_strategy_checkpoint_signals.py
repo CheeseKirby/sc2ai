@@ -161,6 +161,10 @@ def format_strategy_checkpoint_signal_audit(
         f"avg={_optional_float(audit.action_critic_vetoed_probability_avg)} "
         f"max={_optional_float(audit.action_critic_vetoed_probability_max)}",
         f"action_critic_fallback_rows: {audit.action_critic_fallback_rows}",
+        "action_critic_safe_fallback_rows: "
+        f"{audit.action_critic_safe_fallback_rows}",
+        "action_critic_unsafe_fallback_rows: "
+        f"{audit.action_critic_unsafe_fallback_rows}",
         "action_critic_fallback_policies: "
         f"{_inline_counts(audit.action_critic_fallback_policy_counts)}",
         "accept_positive_match: "
@@ -214,6 +218,8 @@ def format_strategy_checkpoint_signal_audit(
                 f"critic_vetoed={_inline_items(decision.critic_vetoed_actions)} "
                 "action_critic_candidates="
                 f"{_inline_items(decision.action_critic_candidate_actions)} "
+                "action_critic_candidate_unsafe="
+                f"{_inline_floats(decision.action_critic_candidate_unsafe_probabilities)} "
                 "action_critic_selected_unsafe="
                 f"{_optional_float(decision.action_critic_selected_unsafe_probability)} "
                 "action_critic_fallback="
@@ -235,6 +241,12 @@ def _inline_items(items: list[str]) -> str:
     if not items:
         return "<none>"
     return ", ".join(items)
+
+
+def _inline_floats(items: list[float]) -> str:
+    if not items:
+        return "<none>"
+    return ", ".join(f"{value:.3f}" for value in items)
 
 
 def _bool_text(value: bool) -> str:

@@ -31,6 +31,7 @@ def _audit(**overrides):
         "predicted_non_executable_rows": 0,
         "predicted_non_executable_ratio": 0.0,
         "action_critic_fallback_rows": 5,
+        "action_critic_unsafe_fallback_rows": 5,
         "action_critic_selected_unsafe_probability_avg": 0.41,
         "action_critic_selected_unsafe_probability_max": 0.72,
     }
@@ -41,7 +42,10 @@ def _audit(**overrides):
 @pytest.mark.unit
 def test_action_critic_threshold_trial_from_audit_ranks_hard_safety_first() -> None:
     safer = action_critic_threshold_trial_from_audit(
-        _audit(action_critic_fallback_rows=10),
+        _audit(
+            action_critic_fallback_rows=10,
+            action_critic_unsafe_fallback_rows=10,
+        ),
         threshold=0.4,
         fallback_policy="lowest-risk",
     )
@@ -57,6 +61,30 @@ def test_action_critic_threshold_trial_from_audit_ranks_hard_safety_first() -> N
     )
 
     assert safer.rank_score < worse.rank_score
+
+
+@pytest.mark.unit
+def test_action_critic_threshold_trial_treats_safe_fallback_as_non_blocking() -> None:
+    safe = action_critic_threshold_trial_from_audit(
+        _audit(
+            signal_healthy=True,
+            blocking_reasons=[],
+            action_critic_fallback_rows=10,
+            action_critic_unsafe_fallback_rows=0,
+        ),
+        threshold=0.4,
+        fallback_policy="first-executable",
+    )
+    unsafe = action_critic_threshold_trial_from_audit(
+        _audit(action_critic_fallback_rows=1, action_critic_unsafe_fallback_rows=1),
+        threshold=0.4,
+        fallback_policy="first-executable",
+    )
+
+    assert safe.signal_healthy is True
+    assert safe.action_critic_fallback_rows == 10
+    assert safe.action_critic_unsafe_fallback_rows == 0
+    assert safe.rank_score < unsafe.rank_score
 
 
 @pytest.mark.unit
@@ -135,4 +163,5 @@ def test_format_strategy_action_critic_threshold_sweep_includes_trials(monkeypat
     assert "Strategy action critic threshold sweep" in report
     assert "threshold=0.400" in report
     assert "fallback_rows=5" in report
+    assert "unsafe_fallback_rows=5" in report
     assert "veto=0/2" in report

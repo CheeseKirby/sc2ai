@@ -423,10 +423,7 @@ def candidate_executability(
     if candidate_action == "ADD_GATEWAYS":
         bases = max(_value(row.observation, "own_bases"), 1.0)
         target_gateways = bases * DEFAULT_GATEWAYS_PER_BASE
-        total_gateways = _value(row.observation, "ready_gateways") + _value(
-            row.observation,
-            "pending_gateways",
-        )
+        total_gateways = _gateway_total_for_executor(row)
         if total_gateways >= target_gateways:
             return False, "target_gateways_reached"
         if _value(row.observation, "minerals") < GATEWAY_MINERALS:
@@ -448,19 +445,25 @@ def candidate_executability(
             return False, "cannot_afford_robo"
         return True, None
     if candidate_action == "FORGE_UPGRADES":
-        if (
-            _value(row.observation, "ready_forge")
-            + _value(row.observation, "pending_forge")
-            <= 0.0
-        ):
+        ready_forge = _value(row.observation, "ready_forge")
+        pending_forge = _value(row.observation, "pending_forge")
+        if ready_forge + pending_forge <= 0.0:
             if _value(row.observation, "minerals") < FORGE_MINERALS:
                 return False, "cannot_afford_forge"
             return True, None
-        if (
-            _value(row.observation, "ground_weapon_upgrade_pending") > 0.0
-            and _value(row.observation, "ground_armor_upgrade_pending") > 0.0
-        ):
+        if ready_forge <= 0.0:
+            return False, "forge_pending"
+        weapon_level = _value(row.observation, "ground_weapon_level")
+        armor_level = _value(row.observation, "ground_armor_level")
+        weapon_pending = _value(row.observation, "ground_weapon_upgrade_pending")
+        armor_pending = _value(row.observation, "ground_armor_upgrade_pending")
+        if weapon_level >= 1.0 and armor_level >= 1.0:
+            return False, "upgrades_completed"
+        pending_upgrades = weapon_pending + armor_pending
+        if weapon_pending > 0.0 and armor_pending > 0.0:
             return False, "upgrade_already_pending"
+        if pending_upgrades > 0.0 and ready_forge <= pending_upgrades:
+            return False, "forge_busy_upgrade_pending"
         if (
             _value(row.observation, "minerals") < STATIC_DEFENSE_MINERALS
             or _value(row.observation, "vespene") < ROBO_VESPENE
@@ -505,6 +508,41 @@ def candidate_executability(
     return False, "unknown_candidate_action"
 
 
+def candidate_executability_from_observation(
+    observation: dict[str, float],
+    candidate_action: str,
+    *,
+    army_observation: dict[str, float] | None = None,
+) -> tuple[bool, str | None]:
+    """Return executability for a live/current observation dict."""
+    row = _StrategyOutcomeRow(
+        path=Path("<runtime>"),
+        source="runtime",
+        step=0,
+        game_time=float(observation.get("game_time", 0.0)),
+        action_id=-1,
+        action_name="",
+        done=False,
+        result=None,
+        observation=dict(observation),
+        observation_details={},
+        army_observation=dict(army_observation or {}),
+        map_name="",
+        difficulty="",
+        opponent_race="",
+        opponent_ai_build="",
+        tactic_id=None,
+        before_action=None,
+        after_action=None,
+        execution_attempted=None,
+        execution_effect=None,
+        execution_blocker=None,
+        execution_unit_type=None,
+        execution_target=None,
+    )
+    return candidate_executability(row, candidate_action)
+
+
 def classify_replay_context(
     row: _StrategyOutcomeRow,
     candidate_action: str,
@@ -544,6 +582,16 @@ def classify_replay_context(
             return "first_robo_vespene_short"
         return "first_robo_resource_short"
     return "other"
+
+
+def _gateway_total_for_executor(row: _StrategyOutcomeRow) -> float:
+    """Return the best offline estimate of StrategyExecutor's gateway total."""
+    pending_gateways = _value(row.observation, "pending_gateways")
+    strategy_total = _value(row.observation, "ready_gateways") + pending_gateways
+    army_structure_count = _value(row.army_observation, "gateways")
+    if army_structure_count <= 0.0:
+        return strategy_total
+    return max(strategy_total, army_structure_count + pending_gateways)
 
 
 def classify_threat_state(row: _StrategyOutcomeRow) -> str:

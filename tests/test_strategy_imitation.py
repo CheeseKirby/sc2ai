@@ -185,6 +185,202 @@ def test_train_strategy_imitation_can_use_signal_filter(tmp_path) -> None:
 
 
 @pytest.mark.unit
+def test_train_strategy_imitation_can_cap_ambiguous_signal_rows(tmp_path) -> None:
+    trajectory = tmp_path / "strategy_signal_capped.jsonl"
+    rows = [
+        {
+            "step": 64,
+            "strategy_observation": {
+                **_observation(1.0),
+                "game_time": 100.0,
+                "minerals": 200.0,
+                "vespene": 150.0,
+                "pending_robo": 0.0,
+                "ready_robo": 0.0,
+                "has_cybernetics_core": 1.0,
+            },
+            "strategy_action": 3,
+            "strategy_action_name": "TECH_ROBO",
+            "done": False,
+        },
+        {
+            "step": 128,
+            "strategy_observation": {
+                **_observation(2.0),
+                "game_time": 150.0,
+                "pending_robo": 1.0,
+                "base_under_threat": 0.0,
+                "base_under_air_threat": 0.0,
+                "base_under_ground_threat": 0.0,
+            },
+            "strategy_action": 0,
+            "strategy_action_name": "STAY_COURSE",
+            "done": False,
+        },
+        {
+            "step": 192,
+            "strategy_observation": {
+                **_observation(3.0),
+                "game_time": 180.0,
+                "pending_robo": 1.0,
+                "base_under_threat": 0.0,
+                "base_under_air_threat": 0.0,
+                "base_under_ground_threat": 0.0,
+            },
+            "strategy_action": 0,
+            "strategy_action_name": "STAY_COURSE",
+            "done": False,
+        },
+    ]
+    trajectory.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    run = create_experiment_run(
+        root=tmp_path / "runs",
+        name="strategy-imitation-capped-filter-unit",
+        kind="strategy_imitation",
+        timestamp="20260623_133000",
+    )
+
+    metrics = train_strategy_imitation_policy(
+        config=StrategyImitationTrainConfig(
+            inputs=(str(trajectory),),
+            epochs=1,
+            batch_size=1,
+            hidden_sizes=(8,),
+            validation_fraction=0.0,
+            seed=5,
+            signal_filter="trainable",
+            max_drop_ambiguous_per_positive=0.0,
+        ),
+        run=run,
+    )
+
+    assert metrics.examples == 1
+    assert metrics.action_counts_by_name == {"TECH_ROBO": 1}
+    assert metrics.signal_filter_summary is not None
+    assert metrics.signal_filter_summary["kept_by_training_use"] == {
+        "accept_positive": 1,
+    }
+    assert metrics.signal_filter_summary["removed_by_training_use"] == {
+        "drop_ambiguous": 2,
+    }
+    assert (
+        metrics.signal_filter_summary["max_drop_ambiguous_per_positive"] == 0.0
+    )
+    assert metrics.signal_filter_summary["drop_ambiguous_examples_kept"] == 0
+
+    metrics_json = read_json(run.artifacts_dir / "metrics.json")
+    assert (
+        metrics_json["signal_filter_summary"]["max_drop_ambiguous_per_positive"]
+        == 0.0
+    )
+
+
+@pytest.mark.unit
+def test_train_strategy_imitation_can_weight_recovery_accept_positive_rows(
+    tmp_path,
+) -> None:
+    trajectory = tmp_path / "strategy_weighted_signal.jsonl"
+    rows = [
+        {
+            "step": 64,
+            "strategy_observation": {
+                **_observation(1.0),
+                "game_time": 100.0,
+                "minerals": 200.0,
+                "vespene": 150.0,
+                "ready_robo": 0.0,
+                "pending_robo": 0.0,
+                "has_cybernetics_core": 1.0,
+            },
+            "strategy_action": 3,
+            "strategy_action_name": "TECH_ROBO",
+            "done": False,
+        },
+        {
+            "step": 128,
+            "strategy_observation": {
+                **_observation(2.0),
+                "game_time": 160.0,
+                "ready_gateways": 1.0,
+                "pending_gateways": 0.0,
+                "pending_robo": 1.0,
+                "minerals": 200.0,
+            },
+            "strategy_action": 2,
+            "strategy_action_name": "ADD_GATEWAYS",
+            "done": False,
+        },
+        {
+            "step": 192,
+            "strategy_observation": {
+                **_observation(3.0),
+                "game_time": 220.0,
+                "ready_gateways": 2.0,
+                "pending_robo": 1.0,
+            },
+            "strategy_action": 0,
+            "strategy_action_name": "STAY_COURSE",
+            "done": False,
+        },
+    ]
+    trajectory.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    run = create_experiment_run(
+        root=tmp_path / "runs",
+        name="strategy-imitation-weighted-filter-unit",
+        kind="strategy_imitation",
+        timestamp="20260623_134000",
+    )
+
+    metrics = train_strategy_imitation_policy(
+        config=StrategyImitationTrainConfig(
+            inputs=(str(trajectory),),
+            epochs=1,
+            batch_size=1,
+            hidden_sizes=(8,),
+            validation_fraction=0.0,
+            seed=5,
+            signal_filter="trainable",
+            recovery_accept_positive_loss_weight=2.0,
+            recovery_accept_positive_action_loss_weights={"TECH_ROBO": 4.0},
+        ),
+        run=run,
+    )
+
+    assert metrics.examples == 2
+    assert metrics.recovery_accept_positive_loss_weight == 2.0
+    assert metrics.recovery_accept_positive_action_loss_weights == {"TECH_ROBO": 4.0}
+    assert metrics.recovery_accept_positive_context_filter == "off"
+    assert metrics.recovery_accept_positive_context_oversample_factor == 1
+    assert metrics.sample_weighted_examples == 1
+    assert metrics.sample_weight_sum == pytest.approx(5.0)
+    assert metrics.signal_filter_summary is not None
+    assert (
+        metrics.signal_filter_summary["recovery_accept_positive_action_loss_weights"]
+        == {"TECH_ROBO": 4.0}
+    )
+    assert (
+        metrics.signal_filter_summary["recovery_accept_positive_weighted_examples"]
+        == 1
+    )
+
+    metrics_json = read_json(run.artifacts_dir / "metrics.json")
+    assert metrics_json["recovery_accept_positive_loss_weight"] == 2.0
+    assert metrics_json["recovery_accept_positive_action_loss_weights"] == {
+        "TECH_ROBO": 4.0,
+    }
+    assert metrics_json["recovery_accept_positive_context_filter"] == "off"
+    assert metrics_json["recovery_accept_positive_context_oversample_factor"] == 1
+    assert metrics_json["sample_weighted_examples"] == 1
+    assert metrics_json["sample_weight_sum"] == pytest.approx(5.0)
+
+
+@pytest.mark.unit
 def test_train_strategy_imitation_blocks_failed_observation_detail_gate(
     tmp_path,
 ) -> None:

@@ -170,6 +170,58 @@ def test_strategy_signal_dataset_drops_non_executable_rows(tmp_path) -> None:
 
 
 @pytest.mark.unit
+def test_strategy_signal_dataset_trusts_successful_execution_metadata(
+    tmp_path,
+) -> None:
+    trajectory = tmp_path / "strategy.jsonl"
+    _write_jsonl(
+        trajectory,
+        [
+            _row(
+                strategy_action=5,
+                strategy_action_name="BUILD_STATIC_DEFENSE",
+                strategy_observation=_observation(
+                    game_time=100.0,
+                    minerals=35.0,
+                    ready_static_defense=0.0,
+                    pending_static_defense=1.0,
+                    base_under_threat=1.0,
+                    base_under_ground_threat=1.0,
+                ),
+                strategy_execution_attempted=True,
+                strategy_execution_effect="build_structure",
+                strategy_execution_unit_type="SHIELDBATTERY",
+            ),
+            _row(
+                strategy_observation=_observation(
+                    game_time=130.0,
+                    minerals=45.0,
+                    ready_static_defense=1.0,
+                    pending_static_defense=0.0,
+                    base_under_threat=1.0,
+                    base_under_ground_threat=1.0,
+                ),
+            ),
+            _row(done=True, result="Result.Tie"),
+        ],
+    )
+
+    dataset = build_strategy_signal_dataset(trajectory)
+    static_record = next(
+        record
+        for record in dataset.records
+        if record.candidate_action == "BUILD_STATIC_DEFENSE"
+    )
+
+    assert static_record.immediate_executable is True
+    assert static_record.candidate_blocker is None
+    assert static_record.payoff_observed is True
+    assert static_record.label_quality == "good"
+    assert static_record.recommended_training_use == "accept_positive"
+    assert "candidate_not_executable" not in " ".join(static_record.reasons)
+
+
+@pytest.mark.unit
 def test_strategy_signal_dataset_marks_bad_production_under_threat_as_veto(
     tmp_path,
 ) -> None:

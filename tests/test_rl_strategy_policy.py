@@ -8,6 +8,12 @@ from sc2.ids.unit_typeid import UnitTypeId
 
 from bot.managers.rl_strategy_policy import RLStrategyPolicy
 from rl.models import PolicyModelSpec, build_policy_model
+from rl.strategy_action_critic import (
+    ACTION_CRITIC_FEATURE_FIELDS,
+    ActionCriticModelSpec,
+    StrategyActionCriticNetwork,
+    save_strategy_action_critic_checkpoint,
+)
 from rl.strategy_actions import StrategyAction
 from rl.strategy_checkpoints import save_strategy_policy_checkpoint
 from rl.strategy_observations import STRATEGY_OBSERVATION_FIELDS
@@ -130,6 +136,43 @@ def _checkpoint_for_strategy_action(tmp_path, action: StrategyAction):
     return checkpoint
 
 
+def _checkpoint_for_strategy_biases(tmp_path, biases: dict[StrategyAction, float]):
+    model = build_policy_model(
+        PolicyModelSpec(
+            observation_dim=len(STRATEGY_OBSERVATION_FIELDS),
+            action_dim=len(StrategyAction),
+            hidden_sizes=(),
+        )
+    )
+    with torch.no_grad():
+        for parameter in model.parameters():
+            parameter.zero_()
+        final = model.net[-1]
+        for action, bias in biases.items():
+            final.bias[int(action)] = bias
+    checkpoint = tmp_path / "strategy_biased.pt"
+    save_strategy_policy_checkpoint(checkpoint, model)
+    return checkpoint
+
+
+def _action_critic_checkpoint(tmp_path, *, unsafe_action: StrategyAction):
+    model = StrategyActionCriticNetwork(
+        ActionCriticModelSpec(
+            feature_dim=len(ACTION_CRITIC_FEATURE_FIELDS),
+            hidden_sizes=(),
+        )
+    )
+    with torch.no_grad():
+        final = model.net[-1]
+        final.weight.zero_()
+        final.bias.fill_(-10.0)
+        action_index = ACTION_CRITIC_FEATURE_FIELDS.index(f"action:{unsafe_action.name}")
+        final.weight[0, action_index] = 20.0
+    checkpoint = tmp_path / "action_critic.pt"
+    save_strategy_action_critic_checkpoint(checkpoint, model)
+    return checkpoint
+
+
 @pytest.mark.unit
 def test_rl_strategy_policy_executes_checkpoint_action(tmp_path) -> None:
     checkpoint = _checkpoint_for_strategy_action(tmp_path, StrategyAction.ADD_GATEWAYS)
@@ -141,3 +184,31 @@ def test_rl_strategy_policy_executes_checkpoint_action(tmp_path) -> None:
     assert bot.build_calls == [(UnitTypeId.GATEWAY, bot.pylon)]
     assert bot.last_strategy_decision_source == "checkpoint"
     assert bot.last_strategy_decision_reason == "checkpoint_greedy_action"
+
+
+@pytest.mark.unit
+def test_rl_strategy_policy_can_mask_with_action_critic(tmp_path) -> None:
+    checkpoint = _checkpoint_for_strategy_biases(
+        tmp_path,
+        {
+            StrategyAction.ADD_GATEWAYS: 10.0,
+            StrategyAction.STAY_COURSE: 9.0,
+        },
+    )
+    critic_checkpoint = _action_critic_checkpoint(
+        tmp_path,
+        unsafe_action=StrategyAction.ADD_GATEWAYS,
+    )
+    bot = FakeBot()
+
+    action = RLStrategyPolicy(
+        checkpoint,
+        action_critic_checkpoint_path=critic_checkpoint,
+        action_critic_threshold=0.5,
+    ).decide_strategy(bot)
+
+    assert action is StrategyAction.STAY_COURSE
+    assert bot.last_strategy_decision_source == "checkpoint"
+    assert "checkpoint_action_critic_mask" in bot.last_strategy_decision_reason
+    assert "raw=ADD_GATEWAYS" in bot.last_strategy_decision_reason
+    assert "selected=STAY_COURSE" in bot.last_strategy_decision_reason

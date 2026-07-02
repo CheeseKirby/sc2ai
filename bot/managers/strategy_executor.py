@@ -288,13 +288,22 @@ class StrategyExecutor:
                 blocker="static_defense_cap_reached",
             )
 
+        if _ready_count(bot, UnitTypeId.FORGE) > 0:
+            cannon_result = await _build_near_power(
+                bot,
+                action,
+                UnitTypeId.PHOTONCANNON,
+            )
+            if cannon_result.effect != "noop":
+                return cannon_result
+            if _ready_count(bot, UnitTypeId.CYBERNETICSCORE) <= 0:
+                return cannon_result
+
         if _ready_count(bot, UnitTypeId.CYBERNETICSCORE) > 0:
             battery_result = await _build_near_power(bot, action, UnitTypeId.SHIELDBATTERY)
             if battery_result.effect != "noop":
                 return battery_result
             return battery_result
-        if _ready_count(bot, UnitTypeId.FORGE) > 0:
-            return await _build_near_power(bot, action, UnitTypeId.PHOTONCANNON)
         return _execution_result(
             action,
             attempted=False,

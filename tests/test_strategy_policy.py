@@ -313,6 +313,37 @@ def test_strategy_executor_static_defense_requires_power_and_tech() -> None:
 
 
 @pytest.mark.unit
+def test_strategy_executor_prefers_photon_cannon_when_forge_is_ready() -> None:
+    bot = FakeBot()
+    bot.structure_counts[UnitTypeId.CYBERNETICSCORE] = [FakeUnit("cyber")]
+    bot.structure_counts[UnitTypeId.FORGE] = [FakeUnit("forge")]
+
+    result = asyncio.run(
+        StrategyExecutor().execute(bot, StrategyAction.BUILD_STATIC_DEFENSE)
+    )
+
+    assert bot.build_calls == [(UnitTypeId.PHOTONCANNON, bot.pylon)]
+    assert result.effect == "build_structure"
+    assert result.unit_type == "PHOTONCANNON"
+
+
+@pytest.mark.unit
+def test_strategy_executor_falls_back_to_battery_when_cannon_unaffordable() -> None:
+    bot = FakeBot()
+    bot.structure_counts[UnitTypeId.CYBERNETICSCORE] = [FakeUnit("cyber")]
+    bot.structure_counts[UnitTypeId.FORGE] = [FakeUnit("forge")]
+    bot.affordable.remove(UnitTypeId.PHOTONCANNON)
+
+    result = asyncio.run(
+        StrategyExecutor().execute(bot, StrategyAction.BUILD_STATIC_DEFENSE)
+    )
+
+    assert bot.build_calls == [(UnitTypeId.SHIELDBATTERY, bot.pylon)]
+    assert result.effect == "build_structure"
+    assert result.unit_type == "SHIELDBATTERY"
+
+
+@pytest.mark.unit
 def test_strategy_executor_reports_produce_army_robo_blocker_when_delegating() -> None:
     bot = FakeBot()
 

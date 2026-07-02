@@ -39,6 +39,12 @@ def _observation(**overrides: float) -> dict[str, float]:
 
 
 @pytest.mark.unit
+def test_coverage_strategy_rejects_unknown_teacher_profile() -> None:
+    with pytest.raises(ValueError, match="Unsupported strategy teacher profile"):
+        CoverageStrategyPolicy(teacher_profile="always-robo")
+
+
+@pytest.mark.unit
 def test_coverage_strategy_builds_static_defense_for_base_threat() -> None:
     policy = CoverageStrategyPolicy()
 
@@ -53,6 +59,24 @@ def test_coverage_strategy_builds_static_defense_for_base_threat() -> None:
     assert action is StrategyAction.BUILD_STATIC_DEFENSE
     assert policy.last_decision_source == "coverage-teacher"
     assert policy.last_decision_reason == "base_threat_static_defense_gap"
+
+
+@pytest.mark.unit
+def test_coverage_strategy_does_not_label_unaffordable_static_defense() -> None:
+    policy = CoverageStrategyPolicy()
+
+    action = policy.decide_from_observation(
+        _observation(
+            own_bases=2.0,
+            minerals=80.0,
+            base_under_threat=1.0,
+            ready_static_defense=1.0,
+            worker_saturation_ratio=0.4,
+        )
+    )
+
+    assert action is StrategyAction.STAY_COURSE
+    assert policy.last_decision_reason == "no_strategy_rule_triggered"
 
 
 @pytest.mark.unit
@@ -137,6 +161,54 @@ def test_coverage_strategy_prioritizes_midgame_forge_before_extra_gateways() -> 
 
 
 @pytest.mark.unit
+def test_coverage_strategy_standard_profile_keeps_midgame_forge_priority() -> None:
+    policy = CoverageStrategyPolicy()
+
+    action = policy.decide_from_observation(
+        _observation(
+            game_time=600.0,
+            own_bases=2.0,
+            minerals=450.0,
+            vespene=650.0,
+            ready_gateways=4.0,
+            ready_robo=0.0,
+            pending_robo=0.0,
+            ready_forge=0.0,
+            army_count=14.0,
+        )
+    )
+
+    assert action is StrategyAction.FORGE_UPGRADES
+    assert policy.last_decision_source == "coverage-teacher"
+    assert policy.last_decision_reason == "midgame_forge_upgrade_gap"
+
+
+@pytest.mark.unit
+def test_coverage_strategy_pre_collapse_profile_techs_late_high_gas_no_robo() -> None:
+    policy = CoverageStrategyPolicy(teacher_profile="pre-collapse-recovery")
+
+    action = policy.decide_from_observation(
+        _observation(
+            game_time=600.0,
+            own_bases=2.0,
+            minerals=450.0,
+            vespene=650.0,
+            ready_gateways=4.0,
+            ready_robo=0.0,
+            pending_robo=0.0,
+            ready_forge=0.0,
+            army_count=14.0,
+        )
+    )
+
+    assert action is StrategyAction.TECH_ROBO
+    assert policy.last_decision_source == (
+        "coverage-teacher:pre-collapse-recovery"
+    )
+    assert policy.last_decision_reason == "pre_collapse_high_vespene_no_robo"
+
+
+@pytest.mark.unit
 def test_coverage_strategy_techs_robo_for_armored_or_cloaked_signals() -> None:
     policy = CoverageStrategyPolicy()
 
@@ -158,6 +230,26 @@ def test_coverage_strategy_techs_robo_for_armored_or_cloaked_signals() -> None:
             vespene=150.0,
         )
     ) is StrategyAction.TECH_ROBO
+
+
+@pytest.mark.unit
+def test_coverage_strategy_does_not_label_unaffordable_initial_robo() -> None:
+    policy = CoverageStrategyPolicy()
+
+    action = policy.decide_from_observation(
+        _observation(
+            minerals=95.0,
+            vespene=300.0,
+            ready_gateways=8.0,
+            ready_robo=0.0,
+            enemy_armored_units_known=1.0,
+            gateway_idle_count=0.0,
+            army_count=16.0,
+        )
+    )
+
+    assert action is StrategyAction.STAY_COURSE
+    assert policy.last_decision_reason == "no_strategy_rule_triggered"
 
 
 @pytest.mark.unit
@@ -241,15 +333,86 @@ def test_coverage_strategy_does_not_duplicate_pending_forge_upgrade() -> None:
             ready_gateways=8.0,
             ready_robo=1.0,
             ready_forge=1.0,
+                ground_weapon_level=0.0,
+                ground_weapon_upgrade_pending=1.0,
+                ground_armor_level=0.0,
+                ready_static_defense=2.0,
+                gateway_idle_count=2.0,
+                army_count=12.0,
+            )
+        )
+
+    assert action is StrategyAction.PRODUCE_ARMY
+
+
+@pytest.mark.unit
+def test_coverage_strategy_builds_midgame_static_floor_after_upgrade_started() -> None:
+    policy = CoverageStrategyPolicy()
+
+    action = policy.decide_from_observation(
+        _observation(
+            game_time=420.0,
+            minerals=180.0,
+            ready_gateways=8.0,
+            ready_forge=1.0,
+            ready_static_defense=0.0,
             ground_weapon_level=0.0,
             ground_weapon_upgrade_pending=1.0,
-            ground_armor_level=0.0,
-            gateway_idle_count=2.0,
+        )
+    )
+
+    assert action is StrategyAction.BUILD_STATIC_DEFENSE
+    assert policy.last_decision_reason == "midgame_static_defense_floor"
+
+
+@pytest.mark.unit
+def test_coverage_strategy_pre_collapse_profile_builds_cyber_static_floor() -> None:
+    policy = CoverageStrategyPolicy(teacher_profile="pre-collapse-recovery")
+
+    action = policy.decide_from_observation(
+        _observation(
+            game_time=480.0,
+            own_bases=2.0,
+            minerals=120.0,
+            vespene=100.0,
+            ready_gateways=8.0,
+            ready_robo=1.0,
+            ready_forge=0.0,
+            ready_static_defense=0.0,
+            pending_static_defense=0.0,
+            gateway_idle_count=0.0,
+            robo_idle_count=0.0,
             army_count=12.0,
         )
     )
 
-    assert action is StrategyAction.PRODUCE_ARMY
+    assert action is StrategyAction.BUILD_STATIC_DEFENSE
+    assert policy.last_decision_reason == "pre_collapse_static_defense_floor"
+
+
+@pytest.mark.unit
+def test_coverage_strategy_pre_collapse_static_floor_requires_affordability() -> None:
+    policy = CoverageStrategyPolicy(teacher_profile="pre-collapse-recovery")
+
+    action = policy.decide_from_observation(
+        _observation(
+            game_time=480.0,
+            own_bases=2.0,
+            minerals=80.0,
+            vespene=100.0,
+            ready_gateways=8.0,
+            ready_robo=1.0,
+            ready_forge=0.0,
+            ready_static_defense=0.0,
+            pending_static_defense=0.0,
+            gateway_idle_count=0.0,
+            robo_idle_count=0.0,
+            army_count=12.0,
+        )
+    )
+
+    assert action is StrategyAction.STAY_COURSE
+    assert policy.last_decision_reason == "no_strategy_rule_triggered"
 
 
 @pytest.mark.unit

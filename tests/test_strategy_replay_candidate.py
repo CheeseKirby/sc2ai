@@ -6,7 +6,10 @@ from dataclasses import asdict
 import pytest
 
 from rl.strategy_observations import STRATEGY_OBSERVATION_FIELDS
-from rl.strategy_replay_candidate import diagnose_strategy_replay_candidate
+from rl.strategy_replay_candidate import (
+    candidate_executability_from_observation,
+    diagnose_strategy_replay_candidate,
+)
 from scripts.diagnose_strategy_replay_candidate import (
     format_strategy_replay_candidate_diagnostics,
 )
@@ -202,6 +205,75 @@ def test_replay_candidate_counts_unchanged_candidates_separately(tmp_path) -> No
     assert diagnostics.group_summaries == []
     assert diagnostics.file_summaries[0].candidate_rows == 1
     assert diagnostics.file_summaries[0].changed_rows == 0
+
+
+@pytest.mark.unit
+def test_replay_candidate_uses_army_gateway_count_for_executor_cap(tmp_path) -> None:
+    trajectory_dir = tmp_path / "strategy"
+    _write_jsonl(
+        trajectory_dir / "001.jsonl",
+        [
+            _row(
+                strategy_action=0,
+                strategy_action_name="STAY_COURSE",
+                strategy_action_before_tactic_filter=2,
+                strategy_action_before_tactic_filter_name="ADD_GATEWAYS",
+                strategy_action_after_tactic_filter=0,
+                strategy_action_after_tactic_filter_name="STAY_COURSE",
+                strategy_observation=_observation(
+                    own_bases=2.0,
+                    ready_gateways=6.0,
+                    pending_gateways=1.0,
+                    minerals=200.0,
+                ),
+                army_observation={"gateways": 7.0},
+            ),
+            _row(done=True, result="Result.Tie"),
+        ],
+    )
+
+    diagnostics = diagnose_strategy_replay_candidate(trajectory_dir)
+
+    assert diagnostics.changed_rows == 1
+    assert diagnostics.immediate_candidate_executable_rows == 0
+    event = diagnostics.file_summaries[0].timeline_events[0]
+    assert event.candidate_action == "ADD_GATEWAYS"
+    assert event.immediate_candidate_executable is False
+    assert event.candidate_blocker == "target_gateways_reached"
+
+
+@pytest.mark.unit
+def test_forge_upgrades_waits_for_pending_forge() -> None:
+    executable, blocker = candidate_executability_from_observation(
+        _observation(
+            ready_forge=0.0,
+            pending_forge=1.0,
+            minerals=800.0,
+            vespene=800.0,
+        ),
+        "FORGE_UPGRADES",
+    )
+
+    assert executable is False
+    assert blocker == "forge_pending"
+
+
+@pytest.mark.unit
+def test_forge_upgrades_waits_for_single_busy_forge_upgrade() -> None:
+    executable, blocker = candidate_executability_from_observation(
+        _observation(
+            ready_forge=1.0,
+            pending_forge=0.0,
+            ground_weapon_upgrade_pending=1.0,
+            ground_armor_upgrade_pending=0.0,
+            minerals=800.0,
+            vespene=800.0,
+        ),
+        "FORGE_UPGRADES",
+    )
+
+    assert executable is False
+    assert blocker == "forge_busy_upgrade_pending"
 
 
 @pytest.mark.unit

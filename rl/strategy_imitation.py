@@ -50,6 +50,12 @@ class StrategyImitationTrainConfig:
     class_weighting: str = "none"
     signal_filter: str = "off"
     observation_detail_gate_path: str | None = None
+    max_drop_ambiguous_per_positive: float | None = None
+    recovery_positive_oversample_factor: int = 1
+    recovery_accept_positive_loss_weight: float = 1.0
+    recovery_accept_positive_action_loss_weights: dict[str, float] | None = None
+    recovery_accept_positive_context_filter: str = "off"
+    recovery_accept_positive_context_oversample_factor: int = 1
 
 
 @dataclass(frozen=True)
@@ -70,6 +76,12 @@ class StrategyImitationTrainMetrics:
     class_weights_by_name: dict[str, float]
     signal_filter: str
     signal_filter_summary: dict | None
+    recovery_accept_positive_loss_weight: float
+    recovery_accept_positive_action_loss_weights: dict[str, float] | None
+    recovery_accept_positive_context_filter: str
+    recovery_accept_positive_context_oversample_factor: int
+    sample_weighted_examples: int
+    sample_weight_sum: float
     train_loss: float
     train_accuracy: float
     validation_loss: float | None
@@ -100,7 +112,17 @@ def train_strategy_imitation_policy(
         training_inputs=config.inputs,
     )
     signal_filter_summary: StrategySignalFilterSummary | None = None
+    sample_weights_np: np.ndarray | None = None
     if config.signal_filter == "off":
+        if (
+            config.recovery_accept_positive_loss_weight != 1.0
+            or config.recovery_accept_positive_action_loss_weights
+            or config.recovery_accept_positive_context_filter != "off"
+            or config.recovery_accept_positive_context_oversample_factor != 1
+        ):
+            raise ValueError(
+                "recovery accept-positive weighting requires a signal filter"
+            )
         dataset = load_strategy_trajectory_dataset(
             config.inputs,
             include_terminal=config.include_terminal,
@@ -115,11 +137,33 @@ def train_strategy_imitation_policy(
             config.inputs,
             filter_name=config.signal_filter,
             include_terminal=config.include_terminal,
+            max_drop_ambiguous_per_positive=(
+                config.max_drop_ambiguous_per_positive
+            ),
+            balance_seed=config.seed,
+            recovery_positive_oversample_factor=(
+                config.recovery_positive_oversample_factor
+            ),
+            recovery_accept_positive_loss_weight=(
+                config.recovery_accept_positive_loss_weight
+            ),
+            recovery_accept_positive_action_loss_weights=(
+                config.recovery_accept_positive_action_loss_weights
+            ),
+            recovery_accept_positive_context_filter=(
+                config.recovery_accept_positive_context_filter
+            ),
+            recovery_accept_positive_context_oversample_factor=(
+                config.recovery_accept_positive_context_oversample_factor
+            ),
         )
         dataset = filtered.dataset
         signal_filter_summary = filtered.summary
+        sample_weights_np = filtered.sample_weights
     if dataset.size == 0:
         raise ValueError("No strategy trajectory examples found for imitation training")
+    if sample_weights_np is None:
+        sample_weights_np = np.ones((dataset.size,), dtype=np.float32)
 
     split = split_dataset(
         dataset,
@@ -155,8 +199,9 @@ def train_strategy_imitation_policy(
 
     train_observations = torch.from_numpy(train_observations_np)
     train_actions = torch.from_numpy(split.train_actions)
+    train_sample_weights = torch.from_numpy(sample_weights_np[split.train_indices])
     loader = DataLoader(
-        TensorDataset(train_observations, train_actions),
+        TensorDataset(train_observations, train_actions, train_sample_weights),
         batch_size=config.batch_size,
         shuffle=True,
         generator=torch.Generator().manual_seed(config.seed),
@@ -168,7 +213,13 @@ def train_strategy_imitation_policy(
         action_dim=len(StrategyAction),
         strategy=config.class_weighting,
     )
-    loss_fn = nn.CrossEntropyLoss(
+    loss_weights = (
+        torch.from_numpy(class_weights).to(device)
+        if config.class_weighting != "none"
+        else None
+    )
+    train_loss_fn = nn.CrossEntropyLoss(weight=loss_weights, reduction="none")
+    eval_loss_fn = nn.CrossEntropyLoss(
         weight=(
             torch.from_numpy(class_weights).to(device)
             if config.class_weighting != "none"
@@ -183,11 +234,15 @@ def train_strategy_imitation_policy(
 
     for _epoch in range(config.epochs):
         model.train()
-        for batch_observations, batch_actions in loader:
+        for batch_observations, batch_actions, batch_sample_weights in loader:
             batch_observations = batch_observations.to(device)
             batch_actions = batch_actions.to(device)
+            batch_sample_weights = batch_sample_weights.to(device)
             logits = model(batch_observations)
-            loss = loss_fn(logits, batch_actions)
+            loss = _weighted_mean_loss(
+                train_loss_fn(logits, batch_actions),
+                batch_sample_weights,
+            )
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -196,7 +251,7 @@ def train_strategy_imitation_policy(
             model,
             torch.from_numpy(train_observations_np).to(device),
             torch.from_numpy(split.train_actions).to(device),
-            loss_fn,
+            eval_loss_fn,
         )
         if split.validation_actions.size:
             (
@@ -207,7 +262,7 @@ def train_strategy_imitation_policy(
                 model,
                 torch.from_numpy(validation_observations_np).to(device),
                 torch.from_numpy(split.validation_actions).to(device),
-                loss_fn,
+                eval_loss_fn,
             )
 
     checkpoint_path = run.checkpoints_dir / "policy.pt"
@@ -220,6 +275,18 @@ def train_strategy_imitation_policy(
             "examples": dataset.size,
             "inputs": list(config.inputs),
             "class_weighting": config.class_weighting,
+            "recovery_accept_positive_loss_weight": (
+                config.recovery_accept_positive_loss_weight
+            ),
+            "recovery_accept_positive_action_loss_weights": (
+                config.recovery_accept_positive_action_loss_weights
+            ),
+            "recovery_accept_positive_context_filter": (
+                config.recovery_accept_positive_context_filter
+            ),
+            "recovery_accept_positive_context_oversample_factor": (
+                config.recovery_accept_positive_context_oversample_factor
+            ),
         },
     )
     if validation_predictions is not None:
@@ -233,7 +300,7 @@ def train_strategy_imitation_policy(
             model,
             torch.from_numpy(train_observations_np).to(device),
             torch.from_numpy(split.train_actions).to(device),
-            loss_fn,
+            eval_loss_fn,
         )
         confusion_matrix = build_confusion_matrix(
             train_predictions.cpu().numpy(),
@@ -271,6 +338,20 @@ def train_strategy_imitation_policy(
             if signal_filter_summary is not None
             else None
         ),
+        recovery_accept_positive_loss_weight=(
+            config.recovery_accept_positive_loss_weight
+        ),
+        recovery_accept_positive_action_loss_weights=(
+            config.recovery_accept_positive_action_loss_weights
+        ),
+        recovery_accept_positive_context_filter=(
+            config.recovery_accept_positive_context_filter
+        ),
+        recovery_accept_positive_context_oversample_factor=(
+            config.recovery_accept_positive_context_oversample_factor
+        ),
+        sample_weighted_examples=int(np.count_nonzero(sample_weights_np != 1.0)),
+        sample_weight_sum=float(sample_weights_np.sum()),
         train_loss=train_loss,
         train_accuracy=train_accuracy,
         validation_loss=validation_loss,
@@ -285,6 +366,10 @@ def train_strategy_imitation_policy(
     )
     write_json(run.artifacts_dir / "metrics.json", asdict(metrics))
     return metrics
+
+
+def _weighted_mean_loss(losses: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
+    return (losses * weights).sum() / weights.sum().clamp_min(1.0)
 
 
 def strategy_per_action_accuracy_by_name(

@@ -212,6 +212,13 @@ def _build_record(
     is_counterfactual: bool,
 ) -> StrategySignalRecord:
     executable, blocker = candidate_executability(row, candidate_action)
+    if _recorded_execution_succeeded(
+        row=row,
+        candidate_action=candidate_action,
+        is_counterfactual=is_counterfactual,
+    ):
+        executable = True
+        blocker = None
     payoff_events_by_window = {
         key: _payoff_events(candidate_action, outcome.events)
         for key, outcome in outcomes.items()
@@ -264,6 +271,19 @@ def _build_record(
         recommended_training_use=training_use,
         reasons=reasons,
     )
+
+
+def _recorded_execution_succeeded(
+    *,
+    row: _StrategyOutcomeRow,
+    candidate_action: str,
+    is_counterfactual: bool,
+) -> bool:
+    if is_counterfactual or candidate_action != row.action_name:
+        return False
+    if row.execution_blocker:
+        return False
+    return row.execution_effect not in {None, "", "noop"}
 
 
 def _classify_signal(

@@ -44,6 +44,7 @@ def test_parse_args_defaults_to_random_ai_build(monkeypatch) -> None:
 
     assert args.ai_builds == ["RandomBuild"]
     assert args.strategy_tactic_mode == "off"
+    assert args.strategy_teacher_profile == "standard"
 
 
 @pytest.mark.unit
@@ -62,6 +63,7 @@ def test_make_eval_config_is_metadata_friendly() -> None:
         army_policy="coverage-teacher",
         strategy_policy="coverage-teacher",
         strategy_tactic_mode="rule",
+        strategy_teacher_profile="pre-collapse-recovery",
         army_attack_threshold=10,
         army_retreat_threshold=7,
         retreat_peak_loss_ratio=0.35,
@@ -72,6 +74,9 @@ def test_make_eval_config_is_metadata_friendly() -> None:
         policy_device="cpu",
         strategy_checkpoint=None,
         strategy_device="cpu",
+        strategy_action_critic_checkpoint=None,
+        strategy_action_critic_threshold=0.5,
+        strategy_action_critic_fallback_policy="lowest-risk",
         trajectory_dir=None,
         strategy_trajectory_dir=None,
     )
@@ -90,6 +95,7 @@ def test_make_eval_config_is_metadata_friendly() -> None:
         "army_policy": "coverage-teacher",
         "strategy_policy": "coverage-teacher",
         "strategy_tactic_mode": "rule",
+        "strategy_teacher_profile": "pre-collapse-recovery",
         "army_attack_threshold": 10,
         "army_retreat_threshold": 7,
         "retreat_peak_loss_ratio": 0.35,
@@ -100,6 +106,9 @@ def test_make_eval_config_is_metadata_friendly() -> None:
         "policy_device": "cpu",
         "strategy_checkpoint": None,
         "strategy_device": "cpu",
+        "strategy_action_critic_checkpoint": None,
+        "strategy_action_critic_threshold": 0.5,
+        "strategy_action_critic_fallback_policy": "lowest-risk",
         "trajectory_dir": None,
         "strategy_trajectory_dir": None,
     }
@@ -211,6 +220,7 @@ def test_run_one_game_forwards_strategy_trajectory_path(tmp_path) -> None:
             army_policy="rule",
             strategy_policy="rule",
             strategy_tactic_mode="off",
+            strategy_teacher_profile="standard",
             army_attack_threshold=None,
             army_retreat_threshold=None,
             retreat_peak_loss_ratio=None,
@@ -221,6 +231,9 @@ def test_run_one_game_forwards_strategy_trajectory_path(tmp_path) -> None:
             policy_device="cpu",
             strategy_checkpoint=None,
             strategy_device="cpu",
+            strategy_action_critic_checkpoint=None,
+            strategy_action_critic_threshold=0.5,
+            strategy_action_critic_fallback_policy="lowest-risk",
             llm_provider=None,
             llm_model=None,
             llm_base_url=None,
@@ -272,6 +285,7 @@ def test_run_one_game_forwards_strategy_policy(tmp_path) -> None:
             army_policy="rule",
             strategy_policy="coverage-teacher",
             strategy_tactic_mode="rule",
+            strategy_teacher_profile="standard",
             army_attack_threshold=None,
             army_retreat_threshold=None,
             retreat_peak_loss_ratio=None,
@@ -282,6 +296,9 @@ def test_run_one_game_forwards_strategy_policy(tmp_path) -> None:
             policy_device="cpu",
             strategy_checkpoint=None,
             strategy_device="cpu",
+            strategy_action_critic_checkpoint=None,
+            strategy_action_critic_threshold=0.5,
+            strategy_action_critic_fallback_policy="lowest-risk",
             llm_provider=None,
             llm_model=None,
             llm_base_url=None,
@@ -304,8 +321,66 @@ def test_run_one_game_forwards_strategy_policy(tmp_path) -> None:
 
 
 @pytest.mark.unit
+def test_run_one_game_forwards_strategy_teacher_profile(tmp_path) -> None:
+    with patch("scripts.evaluate.subprocess.run") as run_mock:
+        run_mock.return_value = SimpleNamespace(
+            returncode=0,
+            stdout="2026 INFO === Game result: Result.Victory ===",
+        )
+
+        record = run_one_game(
+            map_name="ThunderbirdLE",
+            difficulty="Hard",
+            opponent_race="Terran",
+            opponent_ai_build="Power",
+            game_index=1,
+            trajectory_dir=None,
+            strategy_trajectory_dir=None,
+            record_decision_interval=16,
+            guard_interval=0.02,
+            hide_watch_seconds=120.0,
+            hide_watch_interval=0.02,
+            game_time_limit=None,
+            army_policy="rule",
+            strategy_policy="coverage-teacher",
+            strategy_tactic_mode="off",
+            strategy_teacher_profile="pre-collapse-recovery",
+            army_attack_threshold=None,
+            army_retreat_threshold=None,
+            retreat_peak_loss_ratio=None,
+            retreat_min_peak_army=None,
+            retreat_min_lost_from_peak=None,
+            policy_name="rule",
+            policy_checkpoint=None,
+            policy_device="cpu",
+            strategy_checkpoint=None,
+            strategy_device="cpu",
+            strategy_action_critic_checkpoint=None,
+            strategy_action_critic_threshold=0.5,
+            strategy_action_critic_fallback_policy="lowest-risk",
+            llm_provider=None,
+            llm_model=None,
+            llm_base_url=None,
+            llm_api_key_env=None,
+            llm_timeout=None,
+            llm_decision_interval=None,
+            llm_temperature=None,
+            llm_max_output_tokens=None,
+            llm_allow_no_api_key=False,
+            llm_log_dir=None,
+        )
+
+    command = run_mock.call_args.args[0]
+    assert "--strategy-teacher-profile" in command
+    profile_index = command.index("--strategy-teacher-profile") + 1
+    assert command[profile_index] == "pre-collapse-recovery"
+    assert record.strategy_teacher_profile == "pre-collapse-recovery"
+
+
+@pytest.mark.unit
 def test_run_one_game_forwards_strategy_checkpoint(tmp_path) -> None:
     checkpoint = tmp_path / "strategy.pt"
+    critic_checkpoint = tmp_path / "critic.pt"
     with patch("scripts.evaluate.subprocess.run") as run_mock:
         run_mock.return_value = SimpleNamespace(
             returncode=0,
@@ -328,6 +403,7 @@ def test_run_one_game_forwards_strategy_checkpoint(tmp_path) -> None:
             army_policy="rule",
             strategy_policy="checkpoint",
             strategy_tactic_mode="off",
+            strategy_teacher_profile="standard",
             army_attack_threshold=None,
             army_retreat_threshold=None,
             retreat_peak_loss_ratio=None,
@@ -338,6 +414,9 @@ def test_run_one_game_forwards_strategy_checkpoint(tmp_path) -> None:
             policy_device="cpu",
             strategy_checkpoint=checkpoint,
             strategy_device="cpu",
+            strategy_action_critic_checkpoint=critic_checkpoint,
+            strategy_action_critic_threshold=0.95,
+            strategy_action_critic_fallback_policy="first-executable",
             llm_provider=None,
             llm_model=None,
             llm_base_url=None,
@@ -356,7 +435,22 @@ def test_run_one_game_forwards_strategy_checkpoint(tmp_path) -> None:
     assert "--strategy-checkpoint" in command
     assert command[command.index("--strategy-checkpoint") + 1] == str(checkpoint)
     assert "--strategy-device" in command
+    assert "--strategy-action-critic-checkpoint" in command
+    assert (
+        command[command.index("--strategy-action-critic-checkpoint") + 1]
+        == str(critic_checkpoint)
+    )
+    assert "--strategy-action-critic-threshold" in command
+    assert command[command.index("--strategy-action-critic-threshold") + 1] == "0.95"
+    assert "--strategy-action-critic-fallback-policy" in command
+    assert (
+        command[command.index("--strategy-action-critic-fallback-policy") + 1]
+        == "first-executable"
+    )
     assert record.policy_name == "strategy_policy"
     assert record.strategy_policy == "checkpoint"
     assert record.strategy_tactic_mode == "off"
     assert record.strategy_checkpoint == str(checkpoint)
+    assert record.strategy_action_critic_checkpoint == str(critic_checkpoint)
+    assert record.strategy_action_critic_threshold == 0.95
+    assert record.strategy_action_critic_fallback_policy == "first-executable"

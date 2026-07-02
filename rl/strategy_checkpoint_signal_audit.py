@@ -66,6 +66,13 @@ ACTION_CRITIC_FALLBACK_POLICIES: tuple[str, ...] = (
     "threat-risk",
     "mixed-threat-risk",
 )
+SAFE_ACTION_CRITIC_FALLBACK_TRAINING_USES: frozenset[str] = frozenset(
+    {
+        "drop_non_executable",
+        "veto_negative",
+        "action_space_exhausted",
+    }
+)
 _ = _RLStrategyPolicy
 
 
@@ -92,6 +99,7 @@ class StrategyCheckpointSignalDecision:
     critic_vetoed_actions: list[str]
     critic_veto_reasons: list[str]
     action_critic_candidate_actions: list[str]
+    action_critic_candidate_unsafe_probabilities: list[float]
     action_critic_vetoed_probabilities: list[float]
     action_critic_selected_unsafe_probability: float | None
     action_critic_fallback_selected: bool
@@ -146,6 +154,8 @@ class StrategyCheckpointSignalAudit:
     action_critic_vetoed_probability_avg: float | None
     action_critic_vetoed_probability_max: float | None
     action_critic_fallback_rows: int
+    action_critic_safe_fallback_rows: int
+    action_critic_unsafe_fallback_rows: int
     action_critic_fallback_policy_counts: dict[str, int]
     accept_positive_rows: int
     accept_positive_prediction_matches: int
@@ -291,6 +301,9 @@ def audit_strategy_checkpoint_signals(
                     action_critic_candidate_actions=list(
                         prediction.action_critic_candidate_actions
                     ),
+                    action_critic_candidate_unsafe_probabilities=list(
+                        prediction.action_critic_candidate_unsafe_probabilities
+                    ),
                     action_critic_vetoed_probabilities=list(
                         prediction.action_critic_vetoed_probabilities
                     ),
@@ -342,6 +355,7 @@ class _CheckpointPrediction:
     critic_vetoed_actions: tuple[str, ...]
     critic_veto_reasons: tuple[str, ...]
     action_critic_candidate_actions: tuple[str, ...]
+    action_critic_candidate_unsafe_probabilities: tuple[float, ...]
     action_critic_vetoed_probabilities: tuple[float, ...]
     action_critic_selected_unsafe_probability: float | None
     action_critic_fallback_selected: bool
@@ -477,6 +491,9 @@ def _predict_checkpoint_action_for_row(
                     action_critic_candidate_actions=[
                         action for _, action in action_critic_candidates
                     ],
+                    action_critic_candidate_unsafe_probabilities=[
+                        probability for probability, _ in action_critic_candidates
+                    ],
                     action_critic_vetoed_probabilities=(
                         action_critic_vetoed_probabilities
                     ),
@@ -517,6 +534,9 @@ def _predict_checkpoint_action_for_row(
                 critic_veto_reasons=critic_veto_reasons,
                 action_critic_candidate_actions=[
                     action for _, action in action_critic_candidates
+                ],
+                action_critic_candidate_unsafe_probabilities=[
+                    probability for probability, _ in action_critic_candidates
                 ],
                 action_critic_vetoed_probabilities=(
                     action_critic_vetoed_probabilities
@@ -755,6 +775,7 @@ def _prediction(
     critic_vetoed_actions: list[str] | None = None,
     critic_veto_reasons: list[str] | None = None,
     action_critic_candidate_actions: list[str] | None = None,
+    action_critic_candidate_unsafe_probabilities: list[float] | None = None,
     action_critic_vetoed_probabilities: list[float] | None = None,
     action_critic_selected_unsafe_probability: float | None = None,
     action_critic_fallback_selected: bool = False,
@@ -768,6 +789,9 @@ def _prediction(
         critic_veto_reasons=tuple(critic_veto_reasons or ()),
         action_critic_candidate_actions=tuple(
             action_critic_candidate_actions or ()
+        ),
+        action_critic_candidate_unsafe_probabilities=tuple(
+            action_critic_candidate_unsafe_probabilities or ()
         ),
         action_critic_vetoed_probabilities=tuple(
             action_critic_vetoed_probabilities or ()
@@ -815,6 +839,7 @@ def _decision(
     critic_vetoed_actions: list[str],
     critic_veto_reasons: list[str],
     action_critic_candidate_actions: list[str],
+    action_critic_candidate_unsafe_probabilities: list[float],
     action_critic_vetoed_probabilities: list[float],
     action_critic_selected_unsafe_probability: float | None,
     action_critic_fallback_selected: bool,
@@ -841,6 +866,9 @@ def _decision(
         critic_vetoed_actions=critic_vetoed_actions,
         critic_veto_reasons=critic_veto_reasons,
         action_critic_candidate_actions=action_critic_candidate_actions,
+        action_critic_candidate_unsafe_probabilities=(
+            action_critic_candidate_unsafe_probabilities
+        ),
         action_critic_vetoed_probabilities=action_critic_vetoed_probabilities,
         action_critic_selected_unsafe_probability=(
             action_critic_selected_unsafe_probability
@@ -915,6 +943,12 @@ def _summarize(
     action_critic_fallback_rows = sum(
         1 for decision in decisions if decision.action_critic_fallback_selected
     )
+    action_critic_safe_fallback_rows = sum(
+        1 for decision in decisions if _is_safe_action_critic_fallback(decision)
+    )
+    action_critic_unsafe_fallback_rows = (
+        action_critic_fallback_rows - action_critic_safe_fallback_rows
+    )
     action_critic_fallback_policy_counts = _count(
         decision.action_critic_fallback_policy_used or "none"
         for decision in decisions
@@ -966,7 +1000,7 @@ def _summarize(
         veto_negative_matches=veto_negative_matches,
         drop_non_executable_matches=drop_non_executable_matches,
         action_space_exhausted_matches=action_space_exhausted_matches,
-        action_critic_fallback_rows=action_critic_fallback_rows,
+        action_critic_unsafe_fallback_rows=action_critic_unsafe_fallback_rows,
     )
 
     return StrategyCheckpointSignalAudit(
@@ -1051,6 +1085,8 @@ def _summarize(
             vetoed_action_critic_probabilities
         ),
         action_critic_fallback_rows=action_critic_fallback_rows,
+        action_critic_safe_fallback_rows=action_critic_safe_fallback_rows,
+        action_critic_unsafe_fallback_rows=action_critic_unsafe_fallback_rows,
         action_critic_fallback_policy_counts=action_critic_fallback_policy_counts,
         accept_positive_rows=accept_positive_rows,
         accept_positive_prediction_matches=accept_positive_matches,
@@ -1083,6 +1119,28 @@ def _summarize(
     )
 
 
+def _is_safe_action_critic_fallback(decision: StrategyCheckpointSignalDecision) -> bool:
+    if not decision.action_critic_fallback_selected:
+        return False
+    if decision.predicted_action != "STAY_COURSE":
+        return False
+    if not decision.predicted_immediate_executable:
+        return False
+    if decision.recorded_training_use == "accept_positive":
+        return False
+    if (
+        decision.recorded_training_use not in SAFE_ACTION_CRITIC_FALLBACK_TRAINING_USES
+        and decision.recorded_label_quality != "bad"
+    ):
+        return False
+    return not (
+        decision.prediction_matches_bad_recorded
+        or decision.prediction_matches_veto_negative
+        or decision.prediction_matches_drop_non_executable
+        or decision.prediction_matches_action_space_exhausted
+    )
+
+
 def _blocking_reasons(
     *,
     rows: int,
@@ -1091,7 +1149,7 @@ def _blocking_reasons(
     veto_negative_matches: int,
     drop_non_executable_matches: int,
     action_space_exhausted_matches: int,
-    action_critic_fallback_rows: int,
+    action_critic_unsafe_fallback_rows: int,
 ) -> list[str]:
     reasons: list[str] = []
     if rows <= 0:
@@ -1105,7 +1163,7 @@ def _blocking_reasons(
         reasons.append("predicted_matches_drop_non_executable_labels")
     if action_space_exhausted_matches > 0:
         reasons.append("predicted_matches_action_space_exhausted_labels")
-    if action_critic_fallback_rows > 0:
+    if action_critic_unsafe_fallback_rows > 0:
         reasons.append("action_critic_all_executable_candidates_vetoed")
     return reasons
 

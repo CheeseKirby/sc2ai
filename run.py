@@ -25,7 +25,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # Must import bot.config FIRST to set SC2PATH before sc2.* imports
 from bot.config import DEFAULT_MAP, AVAILABLE_MAPS  # noqa: E402
 from bot.managers.coverage_army_policy import CoverageArmyPolicy  # noqa: E402
-from bot.managers.coverage_strategy_policy import CoverageStrategyPolicy  # noqa: E402
+from bot.managers.coverage_strategy_policy import (  # noqa: E402
+    CoverageStrategyPolicy,
+    STRATEGY_TEACHER_PROFILES,
+)
 from bot.managers.llm_army_policy import LLMArmyPolicy, LLMPolicyConfig  # noqa: E402
 from bot.managers.rl_army_policy import RLArmyPolicy  # noqa: E402
 from bot.managers.rl_strategy_policy import RLStrategyPolicy  # noqa: E402
@@ -167,6 +170,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--strategy-teacher-profile",
+        choices=list(STRATEGY_TEACHER_PROFILES),
+        default="standard",
+        help=(
+            "Optional profile for --strategy-policy coverage-teacher. "
+            "pre-collapse-recovery emits targeted recovery labels for "
+            "teacher data collection. Default: standard."
+        ),
+    )
+    p.add_argument(
         "--army-attack-threshold",
         type=int,
         default=None,
@@ -251,6 +264,30 @@ def parse_args() -> argparse.Namespace:
         "--strategy-device",
         default="cpu",
         help="Torch device for --strategy-checkpoint inference (default: cpu).",
+    )
+    p.add_argument(
+        "--strategy-action-critic-checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Optional action critic checkpoint for opt-in masked "
+            "--strategy-policy checkpoint inference."
+        ),
+    )
+    p.add_argument(
+        "--strategy-action-critic-threshold",
+        type=float,
+        default=0.5,
+        help="Unsafe-probability threshold for strategy action critic masking.",
+    )
+    p.add_argument(
+        "--strategy-action-critic-fallback-policy",
+        choices=["lowest-risk", "first-executable"],
+        default="lowest-risk",
+        help=(
+            "Fallback used when all executable strategy candidates are vetoed "
+            "by the action critic."
+        ),
     )
     p.add_argument(
         "--llm-provider",
@@ -379,6 +416,13 @@ def main() -> int:
             "--strategy-tactic-mode currently requires "
             "--strategy-policy coverage-teacher"
         )
+    if (
+        args.strategy_teacher_profile != "standard"
+        and args.strategy_policy != "coverage-teacher"
+    ):
+        raise ValueError(
+            "--strategy-teacher-profile requires --strategy-policy coverage-teacher"
+        )
 
     logger.info("Map:        %s", args.map)
     logger.info("Bot:        ProtossRuleBot (Protoss)")
@@ -406,12 +450,20 @@ def main() -> int:
         logger.info("ArmyPolicy: %s", args.army_policy)
     logger.info("StrategyPolicy: %s", args.strategy_policy)
     logger.info("StrategyTacticMode: %s", args.strategy_tactic_mode)
+    logger.info("StrategyTeacherProfile: %s", args.strategy_teacher_profile)
     if args.strategy_policy == "checkpoint":
         logger.info(
             "StrategyCheckpoint: %s device=%s",
             args.strategy_checkpoint,
             args.strategy_device,
         )
+        if args.strategy_action_critic_checkpoint is not None:
+            logger.info(
+                "StrategyActionCritic: %s threshold=%.3f fallback=%s",
+                args.strategy_action_critic_checkpoint,
+                args.strategy_action_critic_threshold,
+                args.strategy_action_critic_fallback_policy,
+            )
     if args.army_policy == "llm" and args.policy_checkpoint is None:
         logger.info(
             "LLM:        provider=%s model=%s base_url=%s interval=%s",
@@ -486,7 +538,9 @@ def main() -> int:
             )
         )
     if args.strategy_policy == "coverage-teacher":
-        strategy_policy = CoverageStrategyPolicy()
+        strategy_policy = CoverageStrategyPolicy(
+            teacher_profile=args.strategy_teacher_profile,
+        )
         if args.strategy_tactic_mode == "rule":
             strategy_policy = TacticAwareStrategyPolicy(strategy_policy)
         bot_ai.strategy_policy = strategy_policy
@@ -498,6 +552,9 @@ def main() -> int:
         bot_ai.strategy_policy = RLStrategyPolicy(
             args.strategy_checkpoint,
             device=args.strategy_device,
+            action_critic_checkpoint_path=args.strategy_action_critic_checkpoint,
+            action_critic_threshold=args.strategy_action_critic_threshold,
+            action_critic_fallback_policy=args.strategy_action_critic_fallback_policy,
         )
 
     try:

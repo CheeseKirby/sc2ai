@@ -418,10 +418,125 @@ def test_checkpoint_signal_audit_can_apply_action_critic_mask(tmp_path) -> None:
         "PRODUCE_ARMY",
         "STAY_COURSE",
     ]
+    assert len(audit.decisions[0].action_critic_candidate_unsafe_probabilities) == 2
+    assert audit.decisions[0].action_critic_candidate_unsafe_probabilities[0] > 0.99
+    assert audit.decisions[0].action_critic_candidate_unsafe_probabilities[1] < 0.01
     assert audit.decisions[0].action_critic_vetoed_probabilities[0] > 0.99
     assert audit.decisions[0].action_critic_selected_unsafe_probability < 0.01
     assert audit.decisions[0].action_critic_fallback_selected is False
     assert audit.decisions[0].action_critic_fallback_policy_used is None
+
+
+@pytest.mark.unit
+def test_action_critic_safe_stay_course_fallback_does_not_block_bad_row(
+    tmp_path,
+) -> None:
+    checkpoint = _constant_strategy_checkpoint(tmp_path, StrategyAction.STAY_COURSE)
+    critic_checkpoint = _action_critic_checkpoint(
+        tmp_path,
+        unsafe_action=StrategyAction.STAY_COURSE,
+        safe_bias=10.0,
+        unsafe_weight=0.0,
+    )
+    trajectory = tmp_path / "strategy.jsonl"
+    _write_jsonl(
+        trajectory,
+        [
+            _row(
+                step=64,
+                strategy_action=int(StrategyAction.BUILD_STATIC_DEFENSE),
+                strategy_action_name="BUILD_STATIC_DEFENSE",
+                strategy_observation=_observation(
+                    game_time=100.0,
+                    base_under_threat=1.0,
+                    base_under_ground_threat=1.0,
+                    has_cybernetics_core=0.0,
+                    ready_forge=0.0,
+                    ready_static_defense=0.0,
+                    pending_static_defense=0.0,
+                    minerals=200.0,
+                ),
+            ),
+            _row(done=True, result="Result.Tie"),
+        ],
+    )
+
+    audit = audit_strategy_checkpoint_signals(
+        trajectory,
+        checkpoint,
+        prediction_mode="action-critic-mask",
+        action_critic_checkpoint_path=critic_checkpoint,
+        action_critic_threshold=0.5,
+        action_critic_fallback_policy="first-executable",
+    )
+
+    assert audit.signal_healthy is True
+    assert audit.blocking_reasons == []
+    assert audit.action_critic_fallback_rows == 1
+    assert audit.action_critic_safe_fallback_rows == 1
+    assert audit.action_critic_unsafe_fallback_rows == 0
+    assert audit.decisions[0].recorded_training_use == "drop_non_executable"
+    assert audit.decisions[0].predicted_action == "STAY_COURSE"
+    assert audit.decisions[0].action_critic_fallback_selected is True
+
+
+@pytest.mark.unit
+def test_action_critic_stay_course_fallback_blocks_accept_positive_row(
+    tmp_path,
+) -> None:
+    checkpoint = _constant_strategy_checkpoint(tmp_path, StrategyAction.STAY_COURSE)
+    critic_checkpoint = _action_critic_checkpoint(
+        tmp_path,
+        unsafe_action=StrategyAction.STAY_COURSE,
+        safe_bias=10.0,
+        unsafe_weight=0.0,
+    )
+    trajectory = tmp_path / "strategy.jsonl"
+    _write_jsonl(
+        trajectory,
+        [
+            _row(
+                step=64,
+                strategy_action=int(StrategyAction.ADD_GATEWAYS),
+                strategy_action_name="ADD_GATEWAYS",
+                strategy_observation=_observation(
+                    game_time=100.0,
+                    own_bases=2.0,
+                    ready_gateways=1.0,
+                    pending_gateways=0.0,
+                    minerals=200.0,
+                ),
+            ),
+            _row(
+                step=128,
+                strategy_observation=_observation(
+                    game_time=130.0,
+                    own_bases=2.0,
+                    ready_gateways=1.0,
+                    pending_gateways=1.0,
+                    minerals=200.0,
+                ),
+            ),
+            _row(done=True, result="Result.Victory"),
+        ],
+    )
+
+    audit = audit_strategy_checkpoint_signals(
+        trajectory,
+        checkpoint,
+        prediction_mode="action-critic-mask",
+        action_critic_checkpoint_path=critic_checkpoint,
+        action_critic_threshold=0.5,
+        action_critic_fallback_policy="first-executable",
+    )
+
+    assert audit.signal_healthy is False
+    assert "action_critic_all_executable_candidates_vetoed" in audit.blocking_reasons
+    assert audit.action_critic_fallback_rows >= 1
+    assert audit.action_critic_safe_fallback_rows == 0
+    assert audit.action_critic_unsafe_fallback_rows >= 1
+    assert audit.decisions[0].recorded_training_use == "accept_positive"
+    assert audit.decisions[0].predicted_action == "STAY_COURSE"
 
 
 @pytest.mark.unit
@@ -989,6 +1104,8 @@ def test_format_checkpoint_signal_audit_includes_decision_lines(tmp_path) -> Non
     assert "critic_vetoed_candidates:" in report
     assert "action_space_exhausted_match:" in report
     assert "action_critic_fallback_rows:" in report
+    assert "action_critic_safe_fallback_rows:" in report
+    assert "action_critic_unsafe_fallback_rows:" in report
     assert "action_critic_fallback_policy:" in report
     assert "action_critic_fallback_policies:" in report
     assert "predicted_action_counts:" in report
@@ -998,3 +1115,4 @@ def test_format_checkpoint_signal_audit_includes_decision_lines(tmp_path) -> Non
     assert "raw=ADD_GATEWAYS" in report
     assert "blocker=target_gateways_reached" in report
     assert "action_critic_candidates=" in report
+    assert "action_critic_candidate_unsafe=" in report

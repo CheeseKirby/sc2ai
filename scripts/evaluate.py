@@ -23,6 +23,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from bot.managers.coverage_strategy_policy import STRATEGY_TEACHER_PROFILES  # noqa: E402
 from rl.experiments import create_experiment_run, mark_experiment_status, write_json  # noqa: E402
 from scripts.summarize_eval import summarize_records  # noqa: E402
 
@@ -41,7 +42,11 @@ class EvalRecord:
     policy_checkpoint: str | None
     strategy_policy: str
     strategy_tactic_mode: str
+    strategy_teacher_profile: str
     strategy_checkpoint: str | None
+    strategy_action_critic_checkpoint: str | None
+    strategy_action_critic_threshold: float | None
+    strategy_action_critic_fallback_policy: str | None
     map_name: str
     difficulty: str
     opponent_race: str
@@ -196,6 +201,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--strategy-teacher-profile",
+        choices=list(STRATEGY_TEACHER_PROFILES),
+        default="standard",
+        help=(
+            "Optional profile forwarded to run.py for --strategy-policy "
+            "coverage-teacher. Default standard preserves current behavior."
+        ),
+    )
+    parser.add_argument(
         "--army-attack-threshold",
         type=int,
         default=None,
@@ -254,6 +268,27 @@ def parse_args() -> argparse.Namespace:
         "--strategy-device",
         default="cpu",
         help="Torch device forwarded to run.py --strategy-device.",
+    )
+    parser.add_argument(
+        "--strategy-action-critic-checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Optional action critic checkpoint forwarded to run.py for "
+            "masked --strategy-policy checkpoint inference."
+        ),
+    )
+    parser.add_argument(
+        "--strategy-action-critic-threshold",
+        type=float,
+        default=0.5,
+        help="Forwarded to run.py --strategy-action-critic-threshold.",
+    )
+    parser.add_argument(
+        "--strategy-action-critic-fallback-policy",
+        choices=["lowest-risk", "first-executable"],
+        default="lowest-risk",
+        help="Forwarded to run.py --strategy-action-critic-fallback-policy.",
     )
     parser.add_argument(
         "--llm-provider",
@@ -374,6 +409,9 @@ def main() -> int:
                                 army_policy=args.army_policy,
                                 strategy_policy=args.strategy_policy,
                                 strategy_tactic_mode=args.strategy_tactic_mode,
+                                strategy_teacher_profile=(
+                                    args.strategy_teacher_profile
+                                ),
                                 army_attack_threshold=args.army_attack_threshold,
                                 army_retreat_threshold=args.army_retreat_threshold,
                                 retreat_peak_loss_ratio=args.retreat_peak_loss_ratio,
@@ -386,6 +424,15 @@ def main() -> int:
                                 policy_device=args.policy_device,
                                 strategy_checkpoint=args.strategy_checkpoint,
                                 strategy_device=args.strategy_device,
+                                strategy_action_critic_checkpoint=(
+                                    args.strategy_action_critic_checkpoint
+                                ),
+                                strategy_action_critic_threshold=(
+                                    args.strategy_action_critic_threshold
+                                ),
+                                strategy_action_critic_fallback_policy=(
+                                    args.strategy_action_critic_fallback_policy
+                                ),
                                 llm_provider=args.llm_provider,
                                 llm_model=args.llm_model,
                                 llm_base_url=args.llm_base_url,
@@ -444,6 +491,7 @@ def make_eval_config(args: argparse.Namespace) -> dict:
         "army_policy": args.army_policy,
         "strategy_policy": args.strategy_policy,
         "strategy_tactic_mode": args.strategy_tactic_mode,
+        "strategy_teacher_profile": args.strategy_teacher_profile,
         "army_attack_threshold": args.army_attack_threshold,
         "army_retreat_threshold": args.army_retreat_threshold,
         "retreat_peak_loss_ratio": args.retreat_peak_loss_ratio,
@@ -460,6 +508,15 @@ def make_eval_config(args: argparse.Namespace) -> dict:
             else None
         ),
         "strategy_device": args.strategy_device,
+        "strategy_action_critic_checkpoint": (
+            str(args.strategy_action_critic_checkpoint)
+            if args.strategy_action_critic_checkpoint is not None
+            else None
+        ),
+        "strategy_action_critic_threshold": args.strategy_action_critic_threshold,
+        "strategy_action_critic_fallback_policy": (
+            args.strategy_action_critic_fallback_policy
+        ),
         "trajectory_dir": str(args.trajectory_dir) if args.trajectory_dir else None,
         "strategy_trajectory_dir": (
             str(args.strategy_trajectory_dir)
@@ -534,6 +591,7 @@ def run_one_game(
     army_policy: str,
     strategy_policy: str,
     strategy_tactic_mode: str,
+    strategy_teacher_profile: str,
     army_attack_threshold: int | None,
     army_retreat_threshold: int | None,
     retreat_peak_loss_ratio: float | None,
@@ -544,6 +602,9 @@ def run_one_game(
     policy_device: str,
     strategy_checkpoint: Path | None,
     strategy_device: str,
+    strategy_action_critic_checkpoint: Path | None,
+    strategy_action_critic_threshold: float,
+    strategy_action_critic_fallback_policy: str,
     llm_provider: str | None,
     llm_model: str | None,
     llm_base_url: str | None,
@@ -603,6 +664,8 @@ def run_one_game(
     ]
     if strategy_tactic_mode != "off":
         command.extend(["--strategy-tactic-mode", strategy_tactic_mode])
+    if strategy_teacher_profile != "standard":
+        command.extend(["--strategy-teacher-profile", strategy_teacher_profile])
     if strategy_policy == "checkpoint":
         if strategy_checkpoint is None:
             raise ValueError(
@@ -616,6 +679,17 @@ def run_one_game(
                 strategy_device,
             ]
         )
+        if strategy_action_critic_checkpoint is not None:
+            command.extend(
+                [
+                    "--strategy-action-critic-checkpoint",
+                    str(strategy_action_critic_checkpoint),
+                    "--strategy-action-critic-threshold",
+                    str(strategy_action_critic_threshold),
+                    "--strategy-action-critic-fallback-policy",
+                    strategy_action_critic_fallback_policy,
+                ]
+            )
     if game_time_limit is not None:
         command.extend(["--game-time-limit", str(game_time_limit)])
     if policy_checkpoint is not None:
@@ -696,8 +770,24 @@ def run_one_game(
         policy_checkpoint=str(policy_checkpoint) if policy_checkpoint else None,
         strategy_policy=strategy_policy,
         strategy_tactic_mode=strategy_tactic_mode,
+        strategy_teacher_profile=strategy_teacher_profile,
         strategy_checkpoint=(
             str(strategy_checkpoint) if strategy_checkpoint is not None else None
+        ),
+        strategy_action_critic_checkpoint=(
+            str(strategy_action_critic_checkpoint)
+            if strategy_action_critic_checkpoint is not None
+            else None
+        ),
+        strategy_action_critic_threshold=(
+            float(strategy_action_critic_threshold)
+            if strategy_action_critic_checkpoint is not None
+            else None
+        ),
+        strategy_action_critic_fallback_policy=(
+            strategy_action_critic_fallback_policy
+            if strategy_action_critic_checkpoint is not None
+            else None
         ),
         map_name=map_name,
         difficulty=difficulty,

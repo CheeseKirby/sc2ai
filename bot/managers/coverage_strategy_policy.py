@@ -10,6 +10,8 @@ from rl.strategy_observations import (
     validate_strategy_observation_dict,
 )
 
+STRATEGY_TEACHER_PROFILES = ("standard", "pre-collapse-recovery")
+
 
 class CoverageStrategyPolicy:
     """Rule teacher that emits diverse, explainable macro strategy labels.
@@ -25,14 +27,31 @@ class CoverageStrategyPolicy:
     expand_saturation_floor: float = 0.85
     expand_minerals: float = 400.0
     gateway_minerals: float = 150.0
+    robo_minerals: float = 150.0
     robo_vespene: float = 100.0
     forge_minerals: float = 150.0
     forge_min_gateways: int = 4
+    static_defense_minerals: float = 100.0
+    photon_cannon_minerals: float = 150.0
     midgame_time: float = 360.0
+    pre_collapse_robo_time: float = 540.0
+    pre_collapse_robo_vespene_bank: float = 500.0
+    pre_collapse_static_defense_time: float = 420.0
     produce_minerals: float = 100.0
     desired_min_army: float = 10.0
     last_decision_source: str = "coverage-teacher"
     last_decision_reason: str = "uninitialized"
+
+    def __init__(self, *, teacher_profile: str = "standard") -> None:
+        if teacher_profile not in STRATEGY_TEACHER_PROFILES:
+            choices = ", ".join(STRATEGY_TEACHER_PROFILES)
+            raise ValueError(
+                f"Unsupported strategy teacher profile: {teacher_profile!r}. "
+                f"Expected one of: {choices}"
+            )
+        self.teacher_profile = teacher_profile
+        self.last_decision_source = self._decision_source()
+        self.last_decision_reason = "uninitialized"
 
     def decide_strategy(self, bot: Any) -> StrategyAction:
         """Choose one macro strategy label from the current strategy observation."""
@@ -49,7 +68,7 @@ class CoverageStrategyPolicy:
         self,
         observation: dict[str, float],
     ) -> StrategyAction:
-        """Choose one macro strategy label from a strategy_v1 observation dict."""
+        """Choose one macro strategy label from a strategy observation dict."""
         validate_strategy_observation_dict(observation)
         bases = max(_value(observation, "own_bases"), 1.0)
         effective_bases = bases + _value(observation, "pending_bases")
@@ -75,6 +94,7 @@ class CoverageStrategyPolicy:
         if (
             _value(observation, "base_under_threat") > 0.0
             and static_defense_count < target_static_defense
+            and _value(observation, "minerals") >= self.static_defense_minerals
         ):
             return self._decision(
                 StrategyAction.BUILD_STATIC_DEFENSE,
@@ -86,6 +106,7 @@ class CoverageStrategyPolicy:
             < self.worker_saturation_floor
             and _value(observation, "supply_left") > 0.0
             and _value(observation, "minerals") >= 50.0
+            and _value(observation, "base_under_threat") <= 0.0
         ):
             return self._decision(
                 StrategyAction.BOOST_WORKERS,
@@ -108,6 +129,7 @@ class CoverageStrategyPolicy:
         robo_needed = (
             _value(observation, "has_cybernetics_core") > 0.0
             and robo_count <= 0.0
+            and _value(observation, "minerals") >= self.robo_minerals
             and _value(observation, "vespene") >= self.robo_vespene
             and (
                 _value(observation, "enemy_armored_units_known") > 0.0
@@ -121,6 +143,15 @@ class CoverageStrategyPolicy:
                 StrategyAction.TECH_ROBO,
                 "urgent_cloak_detection_robo",
             )
+
+        pre_collapse_action = self._pre_collapse_recovery_decision(
+            observation,
+            bases=bases,
+            robo_count=robo_count,
+            static_defense_count=static_defense_count,
+        )
+        if pre_collapse_action is not None:
+            return pre_collapse_action
 
         forge_upgrade_incomplete = (
             _value(observation, "ground_weapon_level") < 1.0
@@ -146,6 +177,17 @@ class CoverageStrategyPolicy:
             return self._decision(
                 StrategyAction.FORGE_UPGRADES,
                 "midgame_forge_upgrade_gap",
+            )
+
+        if (
+            _value(observation, "game_time") >= self.midgame_time
+            and _value(observation, "ready_forge") > 0.0
+            and static_defense_count < bases
+            and _value(observation, "minerals") >= self.photon_cannon_minerals
+        ):
+            return self._decision(
+                StrategyAction.BUILD_STATIC_DEFENSE,
+                "midgame_static_defense_floor",
             )
 
         if (
@@ -190,9 +232,61 @@ class CoverageStrategyPolicy:
         action: StrategyAction,
         reason: str,
     ) -> StrategyAction:
-        self.last_decision_source = "coverage-teacher"
+        self.last_decision_source = self._decision_source()
         self.last_decision_reason = reason
         return action
+
+    def _decision_source(self) -> str:
+        if self.teacher_profile == "standard":
+            return "coverage-teacher"
+        return f"coverage-teacher:{self.teacher_profile}"
+
+    def _pre_collapse_recovery_decision(
+        self,
+        observation: dict[str, float],
+        *,
+        bases: float,
+        robo_count: float,
+        static_defense_count: float,
+    ) -> StrategyAction | None:
+        if self.teacher_profile != "pre-collapse-recovery":
+            return None
+
+        if (
+            _value(observation, "game_time") >= self.pre_collapse_robo_time
+            and _value(observation, "base_under_threat") <= 0.0
+            and _value(observation, "has_cybernetics_core") > 0.0
+            and robo_count <= 0.0
+            and _value(observation, "minerals") >= self.robo_minerals
+            and _value(observation, "vespene")
+            >= self.pre_collapse_robo_vespene_bank
+        ):
+            return self._decision(
+                StrategyAction.TECH_ROBO,
+                "pre_collapse_high_vespene_no_robo",
+            )
+
+        can_build_cannon = (
+            _value(observation, "ready_forge") > 0.0
+            and _value(observation, "minerals") >= self.photon_cannon_minerals
+        )
+        can_build_battery = (
+            _value(observation, "has_cybernetics_core") > 0.0
+            and _value(observation, "minerals") >= self.static_defense_minerals
+        )
+        if (
+            _value(observation, "game_time")
+            >= self.pre_collapse_static_defense_time
+            and _value(observation, "base_under_threat") <= 0.0
+            and static_defense_count < bases
+            and (can_build_cannon or can_build_battery)
+        ):
+            return self._decision(
+                StrategyAction.BUILD_STATIC_DEFENSE,
+                "pre_collapse_static_defense_floor",
+            )
+
+        return None
 
 
 def _value(observation: dict[str, float], field: str) -> float:

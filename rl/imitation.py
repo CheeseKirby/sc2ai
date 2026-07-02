@@ -67,6 +67,8 @@ class DatasetSplit:
     train_actions: np.ndarray
     validation_observations: np.ndarray
     validation_actions: np.ndarray
+    train_indices: np.ndarray
+    validation_indices: np.ndarray
 
 
 def train_imitation_policy(
@@ -275,6 +277,8 @@ def split_dataset(
         train_actions=dataset.actions[train_indices],
         validation_observations=dataset.observations[validation_indices],
         validation_actions=dataset.actions[validation_indices],
+        train_indices=train_indices,
+        validation_indices=validation_indices,
     )
 
 

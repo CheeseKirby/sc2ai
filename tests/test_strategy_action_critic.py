@@ -188,6 +188,66 @@ def test_strategy_action_critic_dataset_drops_action_space_exhausted_rows(
 
 
 @pytest.mark.unit
+def test_strategy_action_critic_action_space_policy_labels_exhausted_rows_unsafe(
+    tmp_path,
+) -> None:
+    trajectory = tmp_path / "strategy.jsonl"
+    _write_jsonl(
+        trajectory,
+        [
+            _row(
+                step=64,
+                strategy_action=0,
+                strategy_action_name="STAY_COURSE",
+                strategy_observation=_observation(
+                    game_time=100.0,
+                    minerals=25.0,
+                    vespene=0.0,
+                    supply_left=0.0,
+                    own_bases=1.0,
+                    ready_gateways=4.0,
+                    pending_gateways=0.0,
+                    has_cybernetics_core=0.0,
+                    ready_forge=0.0,
+                    ready_robo=0.0,
+                    pending_robo=0.0,
+                    ready_static_defense=0.0,
+                    pending_static_defense=0.0,
+                    base_under_threat=1.0,
+                    base_under_ground_threat=1.0,
+                    army_count=8.0,
+                ),
+            ),
+            _row(
+                step=128,
+                strategy_observation=_observation(
+                    game_time=220.0,
+                    base_under_threat=1.0,
+                    base_under_ground_threat=1.0,
+                    army_count=5.0,
+                ),
+                done=True,
+                result="Result.Defeat",
+            ),
+        ],
+    )
+
+    dataset = load_strategy_action_critic_dataset(
+        trajectory,
+        label_policy="trainable-action-space",
+    )
+
+    assert dataset.label_policy == "trainable-action-space"
+    assert dataset.size == 1
+    assert dataset.label_counts == {1: 1}
+    assert dataset.label_counts_by_name == {"unsafe": 1}
+    assert dataset.training_use_counts == {"action_space_exhausted": 1}
+    assert dataset.dropped_records_by_training_use == {}
+    assert dataset.records[0].candidate_action == "STAY_COURSE"
+    assert dataset.records[0].label_name == "unsafe"
+
+
+@pytest.mark.unit
 def test_strategy_action_critic_conservative_label_policy_drops_ambiguous(
     tmp_path,
 ) -> None:

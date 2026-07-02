@@ -143,7 +143,7 @@ def analyze_strategy_action_space(
                     ),
                     signal=signal,
                     executable_and_blockers={
-                        action: candidate_executability(row, action)
+                        action: _row_action_executability(row, action)
                         for action in action_names
                     },
                 )
@@ -351,6 +351,19 @@ def _metric_averages(rows: list[_ActionSpaceRow]) -> dict[str, float]:
 
 def _action_names() -> list[str]:
     return [STRATEGY_ACTION_NAMES[action_id] for action_id in sorted(STRATEGY_ACTION_NAMES)]
+
+
+def _row_action_executability(
+    row: object,
+    action: str,
+) -> tuple[bool, str | None]:
+    if (
+        action == getattr(row, "action_name", None)
+        and getattr(row, "execution_effect", None) not in {None, "", "noop"}
+        and not getattr(row, "execution_blocker", None)
+    ):
+        return True, None
+    return candidate_executability(row, action)
 
 
 def _row_key(path: str | Path, step: int, action_name: str) -> tuple[str, int, str]:

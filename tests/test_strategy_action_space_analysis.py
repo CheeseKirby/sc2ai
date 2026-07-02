@@ -164,6 +164,39 @@ def test_strategy_action_space_analysis_handles_open_action_space(tmp_path) -> N
 
 
 @pytest.mark.unit
+def test_strategy_action_space_analysis_trusts_successful_execution_metadata(
+    tmp_path,
+) -> None:
+    trajectory = tmp_path / "strategy.jsonl"
+    _write_jsonl(
+        trajectory,
+        [
+            _row(
+                strategy_action=5,
+                strategy_action_name="BUILD_STATIC_DEFENSE",
+                strategy_observation=_observation(
+                    game_time=100.0,
+                    minerals=25.0,
+                    ready_static_defense=0.0,
+                    pending_static_defense=1.0,
+                    base_under_threat=1.0,
+                    base_under_ground_threat=1.0,
+                ),
+                strategy_execution_attempted=True,
+                strategy_execution_effect="build_structure",
+                strategy_execution_unit_type="SHIELDBATTERY",
+            ),
+            _row(done=True, result="Result.Tie"),
+        ],
+    )
+
+    analysis = analyze_strategy_action_space(trajectory)
+
+    assert analysis.only_stay_course_rows == 0
+    assert "STAY_COURSE+BUILD_STATIC_DEFENSE" in analysis.executable_action_sets
+
+
+@pytest.mark.unit
 def test_strategy_action_space_analysis_rejects_negative_examples(tmp_path) -> None:
     trajectory = tmp_path / "strategy.jsonl"
     _write_jsonl(trajectory, [_row(done=True, result="Result.Victory")])

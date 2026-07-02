@@ -54,6 +54,7 @@ class StrategyActionCriticThresholdTrial:
     predicted_non_executable_rows: int
     predicted_non_executable_ratio: float
     action_critic_fallback_rows: int
+    action_critic_unsafe_fallback_rows: int
     action_critic_selected_unsafe_probability_avg: float | None
     action_critic_selected_unsafe_probability_max: float | None
     rank_score: float
@@ -146,6 +147,7 @@ def action_critic_threshold_trial_from_audit(
     drop_matches = _int(audit, "drop_non_executable_prediction_matches")
     predicted_non_executable_rows = _int(audit, "predicted_non_executable_rows")
     fallback_rows = _int(audit, "action_critic_fallback_rows")
+    unsafe_fallback_rows = _unsafe_fallback_rows(audit, fallback_rows)
     prediction_match_ratio = _float(audit, "prediction_match_ratio")
     accept_matches = _int(audit, "accept_positive_prediction_matches")
     rank_score = _rank_score(
@@ -153,6 +155,7 @@ def action_critic_threshold_trial_from_audit(
         drop_non_executable_matches=drop_matches,
         predicted_non_executable_rows=predicted_non_executable_rows,
         action_critic_fallback_rows=fallback_rows,
+        action_critic_unsafe_fallback_rows=unsafe_fallback_rows,
         prediction_match_ratio=prediction_match_ratio,
         accept_positive_matches=accept_matches,
         warnings=len(_list(audit, "warnings")),
@@ -175,6 +178,7 @@ def action_critic_threshold_trial_from_audit(
         predicted_non_executable_rows=predicted_non_executable_rows,
         predicted_non_executable_ratio=_float(audit, "predicted_non_executable_ratio"),
         action_critic_fallback_rows=fallback_rows,
+        action_critic_unsafe_fallback_rows=unsafe_fallback_rows,
         action_critic_selected_unsafe_probability_avg=_optional_float(
             audit,
             "action_critic_selected_unsafe_probability_avg",
@@ -225,6 +229,7 @@ def _rank_score(
     drop_non_executable_matches: int,
     predicted_non_executable_rows: int,
     action_critic_fallback_rows: int,
+    action_critic_unsafe_fallback_rows: int,
     prediction_match_ratio: float,
     accept_positive_matches: int,
     warnings: int,
@@ -234,7 +239,8 @@ def _rank_score(
         + (predicted_non_executable_rows * 100_000.0)
         + (veto_negative_matches * 10_000.0)
         + (drop_non_executable_matches * 5_000.0)
-        + (action_critic_fallback_rows * 10.0)
+        + (action_critic_unsafe_fallback_rows * 10.0)
+        + (action_critic_fallback_rows * 0.1)
         - (prediction_match_ratio * 10.0)
         - (accept_positive_matches * 0.01)
     )
@@ -248,6 +254,16 @@ def _get(payload: StrategyCheckpointSignalAudit | dict[str, Any], key: str, defa
 
 def _int(payload: StrategyCheckpointSignalAudit | dict[str, Any], key: str) -> int:
     return int(_get(payload, key, 0) or 0)
+
+
+def _unsafe_fallback_rows(
+    payload: StrategyCheckpointSignalAudit | dict[str, Any],
+    fallback_rows: int,
+) -> int:
+    value = _get(payload, "action_critic_unsafe_fallback_rows", None)
+    if value is None:
+        return fallback_rows
+    return int(value or 0)
 
 
 def _float(payload: StrategyCheckpointSignalAudit | dict[str, Any], key: str) -> float:
