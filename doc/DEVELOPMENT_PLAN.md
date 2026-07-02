@@ -3,6 +3,140 @@
 This is the current execution plan for the next development stage. It supersedes
 the loop of small tactic-rule patches followed by small Power-only A/B runs.
 
+## 2026-07-02 Update: Recovery-Aware Strategy Candidate v1
+
+This update is the current route for the next development stage. It keeps the
+time-boxed training discipline from the 2026-06-29 plan, but narrows the next
+milestone to a concrete supervised strategy candidate before any PPO work.
+
+### Objective
+
+Build `Recovery-Aware Strategy Candidate v1`:
+
+```text
+A small strategy checkpoint that can recognize pre-collapse recovery windows,
+choose the correct recovery action, execute it, and preserve an explainable
+reason trail.
+```
+
+Target recovery decisions:
+
+```text
+TECH_ROBO:
+  late high-vespene / no Robo / no immediate base threat
+
+BUILD_STATIC_DEFENSE:
+  late low-static-defense / affordable static defense / no immediate base threat
+
+PRODUCE_ARMY:
+  production and army-pressure contexts where units are the correct recovery
+  response, without being absorbed into static-defense pressure
+```
+
+### Why PPO Is Not Next
+
+Do not enter PPO yet.
+
+PPO is still the wrong next training mode because the supervised strategy
+candidate is not yet a reliable starting policy. Current candidates can miss or
+confuse low-level strategic recovery actions before collapse. If PPO starts
+from that behavior, sparse win/loss feedback can reinforce the wrong lesson:
+STAY_COURSE collapse, over-static recovery, or avoidance of useful non-STAY
+actions that are sometimes hard to execute.
+
+PPO also needs infrastructure that is not implemented yet:
+
+```text
+rollout environment wrapper
+action mask integration
+reward shaping and reward logging
+checkpoint save/restore
+interrupted-run recovery
+rollback to rule/off or a known supervised checkpoint
+promotion gates for PPO-produced artifacts
+```
+
+Building that harness is allowed only after the supervised candidate is a
+credible behavior baseline. Actual PPO training should wait until the recovery
+candidate no longer systematically misses the exact strategic windows that PPO
+would otherwise have to discover from sparse end-of-game feedback.
+
+### Next Development Loop
+
+Prefer a data-and-training loop over another scalar/sampler sweep:
+
+```text
+1. Add or collect more matched context-positive recovery rows.
+2. Run the readiness and recovery analysis gates.
+3. Train a small recovery-aware imitation candidate.
+4. Audit it with:
+     scripts\audit_strategy_checkpoint_signals.py
+     scripts\audit_strategy_checkpoint_pre_collapse_recovery.py
+     scripts\audit_strategy_recovery_context.py
+5. Run guarded online smoke only after the offline gates improve without
+   regressing the combined recovery surface.
+```
+
+Do not spend the next cycle on:
+
+```text
+blindly increasing recovery loss weights
+blindly increasing context oversampling factors
+threshold-only critic tuning
+new gates that do not directly decide whether to collect, train, or smoke-test
+```
+
+### Offline Gates Before Online Smoke
+
+The next checkpoint should not enter guarded online smoke unless these gates
+are green or strictly improved with an explicit explanation:
+
+```text
+combined pre-collapse recovery gate does not regress
+context-matched recovery misses = 0
+context-matched cross-action confusion = 0
+veto_negative_match = 0
+drop_non_executable_match = 0
+action_space_exhausted_match = 0
+unsafe_fallback_rows does not expand
+```
+
+If an `action_space_exhausted` row cannot be eliminated directly, it must be
+explained by an earlier recovery decision:
+
+```text
+the model selected TECH_ROBO, BUILD_STATIC_DEFENSE, or PRODUCE_ARMY during the
+lookback window when the recovery action was still executable.
+```
+
+### PPO Readiness Criteria
+
+PPO engineering may begin when:
+
+```text
+Recovery-Aware Strategy Candidate v1 exists
+offline recovery/context gates are clean or clearly improved
+small guarded online smoke shows useful non-STAY actions executing
+rollout logs contain enough state/action/effect/reward detail for attribution
+the default rule/off runtime remains an immediate rollback path
+```
+
+Actual PPO training should wait until:
+
+```text
+the supervised candidate is no longer dominated by STAY_COURSE collapse
+TECH_ROBO/static-defense/produce-army recovery confusion is cleared
+bad-label matches are eliminated or rare and explained
+the PPO harness has reproducible checkpoints and hard stop conditions
+```
+
+Keep the default runtime unchanged throughout this stage:
+
+```text
+--strategy-policy rule
+--strategy-tactic-mode off
+```
+
 ## 2026-06-29 Update: Next Development Operating Mode
 
 Use the combined plan below for the next window/agent:

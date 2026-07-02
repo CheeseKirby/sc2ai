@@ -8,17 +8,86 @@ Compact current state and experiment ledger.
 - This folder is a git repository; the worktree may be dirty from ongoing feature work, so avoid destructive git operations.
 - Latest recorded tests: `.\.venv\Scripts\python.exe -m pytest -q` -> `370 passed`.
 - Latest recorded environment check: `.\.venv\Scripts\python.exe scripts\check_env.py` -> OK.
+- Latest pushed GitHub snapshot: `85e752d Add strategy recovery training audits`.
 - SC2 client: NetEase/China `5.0.15.96999`, `Base96999`.
 - SC2 launches must use hidden-window guard and `scripts/evaluate.py` / `scripts/safe_launch.py`.
-- PPO is not implemented.
+- PPO is not implemented and remains blocked until a recovery-aware supervised
+  strategy candidate is a reliable starting policy.
 - Current learned-policy boundary: army-level decisions plus opt-in low-frequency strategy imitation.
 - Default runtime remains rule/no-op unless a policy is explicitly selected.
 - Current AIBuild status: official built-in AI `AIBuild` is wired into `run.py`, `scripts/evaluate.py`, eval summaries, experiment config, and army/strategy trajectory metadata.
 - Current tactic status: first `TacticSpec` / `TacticState` / `RuleTacticSelector` skeleton is implemented and available only through explicit opt-in `--strategy-policy coverage-teacher --strategy-tactic-mode rule`; tactic-rule runtime is frozen and not promotable on current evidence.
 - Current strategy-teacher recovery profile: `--strategy-policy coverage-teacher --strategy-teacher-profile pre-collapse-recovery` is available for targeted teacher data collection only. It adds bounded, explainable labels for late high-vespene/no-robo `TECH_ROBO` windows and late low-static-defense `BUILD_STATIC_DEFENSE` windows. The default teacher profile remains `standard`, and the default runtime remains rule/off.
-- Current next plan: follow `doc\DEVELOPMENT_PLAN.md`; the fresh strategy metadata/training loop is working, ambiguous-row capped training prevents pure STAY_COURSE training-set dominance, and executor-aligned replay/runtime checks support the action-critic mask. A focused anti-air recovery teacher batch produced useful Photon Cannon / recovery evidence, and the pre-collapse recovery teacher profile successfully collected targeted Thunderbird/Acropolis Hard Terran Power recovery-window data. The checkpoint-level pre-collapse recovery audit now identifies the current blocker more precisely: current candidates can predict some recovery before collapse, but they still miss most recovery `accept_positive` labels, especially `BUILD_STATIC_DEFENSE`. Global, action-specific, and context-aware recovery accept-positive ablations are implemented, and the recovery context slice audit now quantifies action confusion on matched recovery contexts. All current candidates remain hold-only. Do not promote strategy checkpoints, do not promote critics, do not run PPO, and do not change default runtime yet.
+- Current next plan: follow `doc\DEVELOPMENT_PLAN.md`; shift the next work
+  from scalar/sampler sweeps to `Recovery-Aware Strategy Candidate v1`.
+  Add or construct matched context-positive recovery evidence, train a small
+  checkpoint candidate, and require clean recovery/context/veto/action-space
+  offline gates before any guarded online smoke. All current candidates remain
+  hold-only. Do not promote strategy checkpoints, do not promote critics, do
+  not run PPO, and do not change default runtime yet.
 
-## Latest Iteration: Recovery Context Slice Audit
+## Latest Iteration: Route Update And PPO Readiness
+
+Decision:
+
+```text
+Do not enter PPO yet.
+Do not promote any current strategy checkpoint or critic.
+Do not change the default runtime:
+  --strategy-policy rule
+  --strategy-tactic-mode off
+```
+
+Why:
+
+```text
+PPO needs a reliable starting policy, trustworthy reward signals, and a
+rollback-safe training harness. The current bottleneck is earlier than that:
+strategy candidates still miss or confuse pre-collapse recovery actions, and
+the matched recovery context evidence is too sparse for stable policy learning.
+
+The latest recovery context audit shows only 5 combined recovery
+accept-positive rows that match the pre-collapse-recovery context. Context
+oversampling can change the error shape, but it has not cleared the gates:
+TECH_ROBO, BUILD_STATIC_DEFENSE, and PRODUCE_ARMY can still cross-confuse, and
+some candidates regress combined pre-collapse recovery while improving one
+small slice.
+```
+
+Next medium-term objective:
+
+```text
+Build Recovery-Aware Strategy Candidate v1.
+
+The candidate should recognize pre-collapse recovery windows, choose the
+correct recovery action, execute it, and keep an explainable reason trail:
+  TECH_ROBO when late high-vespene/no-robo/no-threat windows appear
+  BUILD_STATIC_DEFENSE when late low-static/affordable/no-threat windows appear
+  PRODUCE_ARMY when production and army-pressure contexts call for units
+```
+
+Required evidence before guarded online smoke:
+
+```text
+combined pre-collapse recovery gate does not regress
+context-matched recovery misses = 0
+context-matched cross-action confusion = 0
+veto_negative/drop_non_executable/action_space bad-label matches are eliminated
+  or strictly improved with an explicit earlier-recovery explanation
+unsafe fallback does not expand
+```
+
+PPO readiness trigger:
+
+```text
+PPO engineering can start after the recovery-aware supervised candidate is a
+credible starting policy and the rollout logs can support reward attribution.
+Actual PPO training should wait until the candidate no longer systematically
+misses low-level strategic recovery windows or learns STAY_COURSE collapse as a
+safe behavior.
+```
+
+## Previous Iteration: Recovery Context Slice Audit
 
 Implementation:
 
