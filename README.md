@@ -21,13 +21,15 @@
 - checkpoint-backed 在线策略推理
 - coverage-teacher 数据采集
 - 实验性 LLM-backed army policy，可输出简短解释
+- 实验性 LLM-backed strategy policy，失败时回退到 `STAY_COURSE`
+- Strategy PPO Gymnasium adapter、transition contract 和占位 reward
+- Stable-Baselines3 PPO 训练接线与 checkpoint strategy adapter
 
 未完成：
 
-- Gymnasium SC2 environment
-- PPO reward function
-- PPO training script
-- PPO checkpoint adapter
+- live BurnySC2 / SC2 PPO backend
+- PPO reward 调参与真实训练
+- PPO 在线评测和 promotion gate
 - curriculum controller
 
 当前 baseline 结论：
@@ -64,6 +66,26 @@ scripts/safe_launch.py
 ```powershell
 .\.venv\Scripts\python.exe scripts\check_env.py
 ```
+
+查看 PPO 框架配置（不会启动 SC2，也不会训练）：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_ppo.py --dry-run
+```
+
+LLM strategy 显式启用示例：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\safe_launch.py --keep-guard -- --strategy-policy llm
+```
+
+PPO checkpoint 在线推理接线：
+
+```text
+--strategy-policy ppo --strategy-checkpoint <stable-baselines3 .zip>
+```
+
+PPO / LLM 框架边界和扩展点见 `doc\PPO_LLM_FRAMEWORK.md`。
 
 运行测试：
 

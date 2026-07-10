@@ -183,12 +183,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--strategy-policy",
-        choices=["rule", "coverage-teacher", "checkpoint"],
+        choices=["rule", "coverage-teacher", "checkpoint", "ppo", "llm"],
         default="rule",
         help=(
             "Strategy policy forwarded to run.py. Defaults to rule no-op. "
             "coverage-teacher is for strategy data collection only; "
-            "checkpoint forwards --strategy-checkpoint."
+            "checkpoint and ppo forward --strategy-checkpoint; llm is experimental."
         ),
     )
     parser.add_argument(
@@ -261,7 +261,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Optional strategy checkpoint forwarded to run.py "
-            "--strategy-checkpoint when --strategy-policy checkpoint."
+            "--strategy-checkpoint for checkpoint or ppo policy."
         ),
     )
     parser.add_argument(
@@ -294,51 +294,51 @@ def parse_args() -> argparse.Namespace:
         "--llm-provider",
         choices=["openai-responses", "openai-chat"],
         default=None,
-        help="Forwarded to run.py --llm-provider when --army-policy llm.",
+        help="Forwarded to run.py for army or strategy LLM policy.",
     )
     parser.add_argument(
         "--llm-model",
         default=None,
-        help="Forwarded to run.py --llm-model when --army-policy llm.",
+        help="Forwarded to run.py for army or strategy LLM policy.",
     )
     parser.add_argument(
         "--llm-base-url",
         default=None,
-        help="Forwarded to run.py --llm-base-url when --army-policy llm.",
+        help="Forwarded to run.py for army or strategy LLM policy.",
     )
     parser.add_argument(
         "--llm-api-key-env",
         default=None,
-        help="Forwarded to run.py --llm-api-key-env when --army-policy llm.",
+        help="Forwarded to run.py for army or strategy LLM policy.",
     )
     parser.add_argument(
         "--llm-timeout",
         type=float,
         default=None,
-        help="Forwarded to run.py --llm-timeout when --army-policy llm.",
+        help="Forwarded to run.py for army or strategy LLM policy.",
     )
     parser.add_argument(
         "--llm-decision-interval",
         type=int,
         default=None,
-        help="Forwarded to run.py --llm-decision-interval when --army-policy llm.",
+        help="Forwarded to run.py for army or strategy LLM policy.",
     )
     parser.add_argument(
         "--llm-temperature",
         type=float,
         default=None,
-        help="Forwarded to run.py --llm-temperature when --army-policy llm.",
+        help="Forwarded to run.py for army or strategy LLM policy.",
     )
     parser.add_argument(
         "--llm-max-output-tokens",
         type=int,
         default=None,
-        help="Forwarded to run.py --llm-max-output-tokens when --army-policy llm.",
+        help="Forwarded to run.py for army or strategy LLM policy.",
     )
     parser.add_argument(
         "--llm-allow-no-api-key",
         action="store_true",
-        help="Forwarded to run.py --llm-allow-no-api-key when --army-policy llm.",
+        help="Forwarded to run.py for army or strategy LLM policy.",
     )
     parser.add_argument(
         "--llm-log-dir",
@@ -568,6 +568,9 @@ def policy_name(args: argparse.Namespace) -> str:
         return Path(args.policy_checkpoint).stem
     if getattr(args, "strategy_checkpoint", None) is not None:
         return Path(args.strategy_checkpoint).stem
+    if getattr(args, "strategy_policy", None) == "llm":
+        model = getattr(args, "llm_model", None)
+        return f"strategy-llm-{model}" if model else "strategy-llm"
     if getattr(args, "army_policy", None) == "llm":
         model = getattr(args, "llm_model", None)
         return f"llm-{model}" if model else "llm"
@@ -666,10 +669,10 @@ def run_one_game(
         command.extend(["--strategy-tactic-mode", strategy_tactic_mode])
     if strategy_teacher_profile != "standard":
         command.extend(["--strategy-teacher-profile", strategy_teacher_profile])
-    if strategy_policy == "checkpoint":
+    if strategy_policy in {"checkpoint", "ppo"}:
         if strategy_checkpoint is None:
             raise ValueError(
-                "strategy_policy='checkpoint' requires strategy_checkpoint"
+                f"strategy_policy={strategy_policy!r} requires strategy_checkpoint"
             )
         command.extend(
             [
@@ -679,7 +682,10 @@ def run_one_game(
                 strategy_device,
             ]
         )
-        if strategy_action_critic_checkpoint is not None:
+        if (
+            strategy_policy == "checkpoint"
+            and strategy_action_critic_checkpoint is not None
+        ):
             command.extend(
                 [
                     "--strategy-action-critic-checkpoint",
@@ -715,27 +721,27 @@ def run_one_game(
             command.extend(
                 ["--retreat-min-lost-from-peak", str(retreat_min_lost_from_peak)]
             )
-        if army_policy == "llm":
-            if llm_provider is not None:
-                command.extend(["--llm-provider", llm_provider])
-            if llm_model is not None:
-                command.extend(["--llm-model", llm_model])
-            if llm_base_url is not None:
-                command.extend(["--llm-base-url", llm_base_url])
-            if llm_api_key_env is not None:
-                command.extend(["--llm-api-key-env", llm_api_key_env])
-            if llm_timeout is not None:
-                command.extend(["--llm-timeout", str(llm_timeout)])
-            if llm_decision_interval is not None:
-                command.extend(["--llm-decision-interval", str(llm_decision_interval)])
-            if llm_temperature is not None:
-                command.extend(["--llm-temperature", str(llm_temperature)])
-            if llm_max_output_tokens is not None:
-                command.extend(["--llm-max-output-tokens", str(llm_max_output_tokens)])
-            if llm_allow_no_api_key:
-                command.append("--llm-allow-no-api-key")
-            if llm_log_path is not None:
-                command.extend(["--llm-log-path", str(llm_log_path)])
+    if army_policy == "llm" or strategy_policy == "llm":
+        if llm_provider is not None:
+            command.extend(["--llm-provider", llm_provider])
+        if llm_model is not None:
+            command.extend(["--llm-model", llm_model])
+        if llm_base_url is not None:
+            command.extend(["--llm-base-url", llm_base_url])
+        if llm_api_key_env is not None:
+            command.extend(["--llm-api-key-env", llm_api_key_env])
+        if llm_timeout is not None:
+            command.extend(["--llm-timeout", str(llm_timeout)])
+        if llm_decision_interval is not None:
+            command.extend(["--llm-decision-interval", str(llm_decision_interval)])
+        if llm_temperature is not None:
+            command.extend(["--llm-temperature", str(llm_temperature)])
+        if llm_max_output_tokens is not None:
+            command.extend(["--llm-max-output-tokens", str(llm_max_output_tokens)])
+        if llm_allow_no_api_key:
+            command.append("--llm-allow-no-api-key")
+        if llm_log_path is not None:
+            command.extend(["--llm-log-path", str(llm_log_path)])
     if trajectory_path is not None:
         command.extend(
             [

@@ -30,6 +30,8 @@ from bot.managers.coverage_strategy_policy import (  # noqa: E402
     STRATEGY_TEACHER_PROFILES,
 )
 from bot.managers.llm_army_policy import LLMArmyPolicy, LLMPolicyConfig  # noqa: E402
+from bot.managers.llm_strategy_policy import LLMStrategyPolicy  # noqa: E402
+from bot.managers.ppo_strategy_policy import PPOStrategyPolicy  # noqa: E402
 from bot.managers.rl_army_policy import RLArmyPolicy  # noqa: E402
 from bot.managers.rl_strategy_policy import RLStrategyPolicy  # noqa: E402
 from bot.managers.tactic_strategy_policy import TacticAwareStrategyPolicy  # noqa: E402
@@ -151,12 +153,12 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--strategy-policy",
-        choices=["rule", "coverage-teacher", "checkpoint"],
+        choices=["rule", "coverage-teacher", "checkpoint", "ppo", "llm"],
         default="rule",
         help=(
             "Low-frequency strategy policy. Defaults to rule no-op. "
             "coverage-teacher is for strategy data collection only; "
-            "checkpoint loads --strategy-checkpoint."
+            "checkpoint and ppo load --strategy-checkpoint; llm is experimental."
         ),
     )
     p.add_argument(
@@ -256,8 +258,8 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help=(
-            "Optional strategy policy checkpoint used when "
-            "--strategy-policy checkpoint is selected."
+            "Optional strategy policy checkpoint used for "
+            "--strategy-policy checkpoint or ppo."
         ),
     )
     p.add_argument(
@@ -294,7 +296,7 @@ def parse_args() -> argparse.Namespace:
         choices=["openai-responses", "openai-chat"],
         default=None,
         help=(
-            "LLM API provider for --army-policy llm. Defaults to "
+            "LLM API provider for army or strategy LLM policy. Defaults to "
             "SC2_LLM_PROVIDER or openai-responses."
         ),
     )
@@ -302,7 +304,7 @@ def parse_args() -> argparse.Namespace:
         "--llm-model",
         default=None,
         help=(
-            "Model for --army-policy llm. Defaults to SC2_LLM_MODEL, "
+            "Model for army or strategy LLM policy. Defaults to SC2_LLM_MODEL, "
             "OPENAI_MODEL, or a small GPT model."
         ),
     )
@@ -310,7 +312,7 @@ def parse_args() -> argparse.Namespace:
         "--llm-base-url",
         default=None,
         help=(
-            "Base URL for --army-policy llm. Defaults to SC2_LLM_BASE_URL "
+            "Base URL for army or strategy LLM policy. Defaults to SC2_LLM_BASE_URL "
             "or https://api.openai.com/v1."
         ),
     )
@@ -451,7 +453,7 @@ def main() -> int:
     logger.info("StrategyPolicy: %s", args.strategy_policy)
     logger.info("StrategyTacticMode: %s", args.strategy_tactic_mode)
     logger.info("StrategyTeacherProfile: %s", args.strategy_teacher_profile)
-    if args.strategy_policy == "checkpoint":
+    if args.strategy_policy in {"checkpoint", "ppo"}:
         logger.info(
             "StrategyCheckpoint: %s device=%s",
             args.strategy_checkpoint,
@@ -464,7 +466,9 @@ def main() -> int:
                 args.strategy_action_critic_threshold,
                 args.strategy_action_critic_fallback_policy,
             )
-    if args.army_policy == "llm" and args.policy_checkpoint is None:
+    if (
+        args.army_policy == "llm" and args.policy_checkpoint is None
+    ) or args.strategy_policy == "llm":
         logger.info(
             "LLM:        provider=%s model=%s base_url=%s interval=%s",
             args.llm_provider or "env/default",
@@ -505,6 +509,22 @@ def main() -> int:
         },
         record_decision_interval=args.record_decision_interval,
     )
+    llm_config = None
+    if (
+        args.army_policy == "llm" and args.policy_checkpoint is None
+    ) or args.strategy_policy == "llm":
+        llm_config = LLMPolicyConfig.from_env(
+            provider=args.llm_provider,
+            model=args.llm_model,
+            base_url=args.llm_base_url,
+            api_key_env=args.llm_api_key_env,
+            timeout_seconds=args.llm_timeout,
+            decision_interval=args.llm_decision_interval,
+            temperature=args.llm_temperature,
+            max_output_tokens=args.llm_max_output_tokens,
+            require_api_key=False if args.llm_allow_no_api_key else None,
+            log_path=args.llm_log_path,
+        )
     if args.army_attack_threshold is not None:
         bot_ai.ARMY_ATTACK_THRESHOLD = args.army_attack_threshold
     if args.army_retreat_threshold is not None:
@@ -523,20 +543,8 @@ def main() -> int:
     elif args.army_policy == "coverage-teacher":
         bot_ai.army_policy = CoverageArmyPolicy()
     elif args.army_policy == "llm":
-        bot_ai.army_policy = LLMArmyPolicy(
-            LLMPolicyConfig.from_env(
-                provider=args.llm_provider,
-                model=args.llm_model,
-                base_url=args.llm_base_url,
-                api_key_env=args.llm_api_key_env,
-                timeout_seconds=args.llm_timeout,
-                decision_interval=args.llm_decision_interval,
-                temperature=args.llm_temperature,
-                max_output_tokens=args.llm_max_output_tokens,
-                require_api_key=False if args.llm_allow_no_api_key else None,
-                log_path=args.llm_log_path,
-            )
-        )
+        assert llm_config is not None
+        bot_ai.army_policy = LLMArmyPolicy(llm_config)
     if args.strategy_policy == "coverage-teacher":
         strategy_policy = CoverageStrategyPolicy(
             teacher_profile=args.strategy_teacher_profile,
@@ -556,6 +564,16 @@ def main() -> int:
             action_critic_threshold=args.strategy_action_critic_threshold,
             action_critic_fallback_policy=args.strategy_action_critic_fallback_policy,
         )
+    elif args.strategy_policy == "ppo":
+        if args.strategy_checkpoint is None:
+            raise ValueError("--strategy-policy ppo requires --strategy-checkpoint")
+        bot_ai.strategy_policy = PPOStrategyPolicy(
+            args.strategy_checkpoint,
+            device=args.strategy_device,
+        )
+    elif args.strategy_policy == "llm":
+        assert llm_config is not None
+        bot_ai.strategy_policy = LLMStrategyPolicy(llm_config)
 
     try:
         result = run_game(

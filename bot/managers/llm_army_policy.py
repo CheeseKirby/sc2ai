@@ -197,62 +197,82 @@ class LLMDecisionClient(Protocol):
         """Return one normalized high-level army decision."""
 
 
-class OpenAICompatibleDecisionClient:
-    """Small stdlib HTTP client for OpenAI Responses or Chat-compatible APIs."""
+class OpenAICompatibleStructuredClient:
+    """Small reusable JSON-schema client for OpenAI-compatible APIs."""
 
     def __init__(self, config: LLMPolicyConfig) -> None:
         config.validate()
         self.config = config
 
-    def request_decision(
+    def request_json(
         self,
         *,
-        observation: dict[str, float],
-        previous_action: ArmyAction,
-        recent_decisions: list[dict[str, Any]],
-    ) -> LLMDecision:
-        """Ask the configured model for one high-level army decision."""
-        payload = build_llm_payload(
-            observation=observation,
-            previous_action=previous_action,
-            recent_decisions=recent_decisions,
-        )
+        instructions: str,
+        payload: dict[str, Any],
+        schema: dict[str, Any],
+        schema_name: str,
+    ) -> dict[str, Any]:
+        """Request one structured JSON object from the configured provider."""
         if self.config.provider == "openai-chat":
-            response = self._post_json("/chat/completions", self._chat_body(payload))
+            response = self._post_json(
+                "/chat/completions",
+                self._chat_body(
+                    instructions=instructions,
+                    payload=payload,
+                    schema=schema,
+                    schema_name=schema_name,
+                ),
+            )
             text = extract_chat_text(response)
         else:
-            response = self._post_json("/responses", self._responses_body(payload))
+            response = self._post_json(
+                "/responses",
+                self._responses_body(
+                    instructions=instructions,
+                    payload=payload,
+                    schema=schema,
+                    schema_name=schema_name,
+                ),
+            )
             text = extract_responses_text(response)
-        decision = parse_llm_decision(text)
-        return LLMDecision(
-            action=decision.action,
-            reasoning=decision.reasoning,
-            confidence=decision.confidence,
-            source="llm",
-        )
+        return _loads_json_object(text)
 
-    def _responses_body(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _responses_body(
+        self,
+        *,
+        instructions: str,
+        payload: dict[str, Any],
+        schema: dict[str, Any],
+        schema_name: str,
+    ) -> dict[str, Any]:
         return {
             "model": self.config.model,
-            "instructions": SYSTEM_PROMPT,
+            "instructions": instructions,
             "input": json.dumps(payload, ensure_ascii=False),
             "temperature": self.config.temperature,
             "max_output_tokens": self.config.max_output_tokens,
             "text": {
                 "format": {
                     "type": "json_schema",
-                    "name": "sc2_army_decision",
-                    "schema": DECISION_SCHEMA,
+                    "name": schema_name,
+                    "schema": schema,
                     "strict": True,
                 }
             },
         }
 
-    def _chat_body(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _chat_body(
+        self,
+        *,
+        instructions: str,
+        payload: dict[str, Any],
+        schema: dict[str, Any],
+        schema_name: str,
+    ) -> dict[str, Any]:
         return {
             "model": self.config.model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": instructions},
                 {
                     "role": "user",
                     "content": json.dumps(payload, ensure_ascii=False),
@@ -263,8 +283,8 @@ class OpenAICompatibleDecisionClient:
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
-                    "name": "sc2_army_decision",
-                    "schema": DECISION_SCHEMA,
+                    "name": schema_name,
+                    "schema": schema,
                     "strict": True,
                 },
             },
@@ -307,6 +327,40 @@ class OpenAICompatibleDecisionClient:
             return json.loads(text)
         except json.JSONDecodeError as exc:
             raise LLMDecisionError("LLM API returned non-JSON response") from exc
+
+
+class OpenAICompatibleDecisionClient:
+    """Army-decision adapter over the reusable structured LLM client."""
+
+    def __init__(self, config: LLMPolicyConfig) -> None:
+        self.client = OpenAICompatibleStructuredClient(config)
+
+    def request_decision(
+        self,
+        *,
+        observation: dict[str, float],
+        previous_action: ArmyAction,
+        recent_decisions: list[dict[str, Any]],
+    ) -> LLMDecision:
+        """Ask the configured model for one high-level army decision."""
+        payload = build_llm_payload(
+            observation=observation,
+            previous_action=previous_action,
+            recent_decisions=recent_decisions,
+        )
+        response = self.client.request_json(
+            instructions=SYSTEM_PROMPT,
+            payload=payload,
+            schema=DECISION_SCHEMA,
+            schema_name="sc2_army_decision",
+        )
+        decision = parse_llm_decision(response)
+        return LLMDecision(
+            action=decision.action,
+            reasoning=decision.reasoning,
+            confidence=decision.confidence,
+            source="llm",
+        )
 
 
 class LLMArmyPolicy:
