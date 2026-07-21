@@ -3,6 +3,16 @@
 这是一个 StarCraft II 神族 Bot 项目，目标是逐步做出一个能感知战局、解释思路、并根据局势调整打法的对战 AI。
 
 
+## 项目亮点：Hybrid Game AI Strategy Lab
+
+项目提供一个不启动 SC2、不调用 LLM API、也不训练模型的离线策略竞技场，用同一套 40 维观测和 8 类宏观动作比较 heuristic、random、stay-course、PPO checkpoint 和结构化 LLM planner。
+
+```powershell
+.\.venv\Scripts\python.exe scripts\benchmark_strategy_lab.py --policies heuristic random stay-course --episodes-per-scenario 4
+```
+
+输出包含标准实验元数据、汇总报告和逐步 JSONL 决策轨迹，覆盖 reward 分解、动作阻塞、fallback、延迟和分场景结果。求职展示导览见 `doc\GAME_AI_ENGINEERING_PORTFOLIO.md`。
+
 ## 当前状态
 
 已完成：
@@ -21,8 +31,10 @@
 - coverage-teacher 数据采集
 - 实验性 LLM-backed army policy，可输出简短解释
 - 实验性 LLM-backed strategy policy，失败时回退到 `STAY_COURSE`
-- Strategy PPO Gymnasium adapter、transition contract 和占位 reward
+- Strategy PPO Gymnasium adapter、严格 transition contract 和可解释 reward
 - Stable-Baselines3 PPO 训练接线与 checkpoint strategy adapter
+- 五类 deterministic surrogate 场景，可在无 SC2 环境下验证完整策略链路
+- Strategy Lab 统一评测、故障回退、延迟指标和 JSONL 决策追踪
 
 未完成：
 
@@ -69,7 +81,7 @@ scripts/safe_launch.py
 查看 PPO 框架配置（不会启动 SC2，也不会训练）：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\train_ppo.py --dry-run
+.\.venv\Scripts\python.exe scripts\train_ppo.py --backend surrogate --dry-run
 ```
 
 LLM strategy 显式启用示例：

@@ -1,6 +1,8 @@
-# PPO and LLM Framework
+# PPO and LLM Strategy Framework
 
-This document describes scaffolding only. The default runtime remains:
+The framework is runnable for interface and evaluation checks, but no trained
+PPO model or live-SC2 performance claim is included. The production defaults
+remain:
 
 ```text
 --army-policy rule
@@ -8,85 +10,128 @@ This document describes scaffolding only. The default runtime remains:
 --strategy-tactic-mode off
 ```
 
+## Shared Decision Boundary
+
+Both learned planners consume the 40-field `strategy_v2` observation and select
+one of eight `StrategyAction` intents. `StrategyExecutor` retains authority over
+resource checks and concrete SC2 commands.
+
+```text
+observation -> planner -> StrategyAction -> deterministic executor -> feedback
+```
+
+This keeps LLM latency and model errors away from frame-level unit control.
+
 ## PPO
 
-The PPO scaffold targets the existing 40-field `strategy_v2` observation and
-the eight-value `StrategyAction` space.
-
-Components:
+The PPO path contains:
 
 ```text
 rl/ppo_types.py
-  state_before / action / execution_result / state_after transition contract
-  StrategyEnvBackend protocol for a future live or replay backend
+  state_before / action / execution_result / state_after contract
+  StrategyEnvBackend protocol for surrogate, replay, or live backends
 
 rl/ppo_env.py
-  Gymnasium SC2StrategyPPOEnv adapter
-  rejects mismatched state_before transitions
+  Gymnasium adapter
+  rejects inconsistent state_before transitions
+  emits reward attribution in info["reward_components"]
+
+rl/ppo_surrogate_backend.py
+  five deterministic macro scenarios for portable pipeline checks
+  explicitly not a StarCraft II simulator
 
 rl/ppo_rewards.py
-  explicit placeholder reward weights
+  configurable, explainable reward components
 
 rl/ppo_training.py
-  Stable-Baselines3 PPO construction, learn, and save wiring
+  Stable-Baselines3 construction, learn, and checkpoint-save wiring
 
 bot/managers/ppo_strategy_policy.py
-  deterministic online inference from an SB3 .zip checkpoint
+  deterministic inference from an SB3 .zip checkpoint
 
 scripts/train_ppo.py
-  dry-run config and backend-factory entry point
+  dry-run, surrogate, and external backend entry points
 ```
 
-Inspect the configuration without creating a run or starting training:
+Inspect configuration without training:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\train_ppo.py --dry-run
+.\.venv\Scripts\python.exe scripts\train_ppo.py `
+  --backend surrogate `
+  --dry-run
 ```
 
-Actual training requires a backend factory:
+The surrogate option exists to validate plumbing when compute or SC2 is not
+available. A future real backend uses:
 
 ```text
-package.module:callable -> StrategyEnvBackend
+--backend external --backend-factory package.module:callable
 ```
 
-No live SC2 backend is included yet. A future backend owns safe SC2 launch,
-episode reset, action execution, state capture, termination, and cleanup.
+No live backend is included. A live or replay backend must own safe reset,
+action execution, pre/post state capture, termination, and cleanup.
 
 ## LLM
 
-The existing Army LLM policy remains available through:
+Army and Strategy LLM policies are available only when explicitly selected:
 
 ```text
 --army-policy llm
-```
-
-The new low-frequency Strategy LLM policy is available through:
-
-```text
 --strategy-policy llm
 ```
 
-Both use the existing `--llm-*` configuration and support OpenAI Responses or
-OpenAI-compatible Chat Completions with strict JSON-schema output. Strategy LLM
-responses are limited to the existing eight `StrategyAction` values. Missing
-configuration, request errors, parse errors, or invalid actions fall back to
-the no-op rule policy (`STAY_COURSE`).
+They use OpenAI Responses or OpenAI-compatible Chat Completions with strict
+JSON Schema output. Strategy responses are limited to the existing eight
+actions and include concise reasoning plus confidence. Missing configuration,
+request errors, parse errors, and invalid actions fall back to `STAY_COURSE`.
 
-The LLM chooses intent only. `StrategyExecutor` still validates prerequisites
-and performs the actual build, production, upgrade, or defense command.
-
-## Explicit Non-Goals
-
-This scaffold does not claim:
+The portable benchmark requires a second acknowledgement before making calls:
 
 ```text
-PPO reward correctness
-live SC2 environment correctness
-trained PPO performance
-LLM latency safety
-LLM or PPO promotion readiness
+--policies llm --allow-llm-api
 ```
 
-Before real training, implement a guarded live backend, collect clean
-state-before/state-after transitions, define reward attribution, add episode
-level holdouts, and establish offline plus guarded online promotion gates.
+This prevents an offline evaluation command from silently creating API cost.
+
+## Strategy Lab
+
+Run local baselines without SC2, API calls, or training:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\benchmark_strategy_lab.py `
+  --policies heuristic random stay-course `
+  --episodes-per-scenario 4
+```
+
+The report compares:
+
+```text
+surrogate win rate and mean reward
+execution and blocked-action rates
+fallback count
+mean / p50 / p95 decision latency
+action distribution
+per-scenario metrics
+```
+
+The JSONL trace includes decision source, action, reasoning, confidence,
+execution blocker, policy error, reward components, objective progress, and
+latency. PPO checkpoints and live LLM clients can be evaluated through the same
+interface when explicitly configured.
+
+## Honest Boundaries
+
+The framework does not claim:
+
+```text
+surrogate metrics equal live SC2 performance
+reward weights are tuned
+PPO has been trained
+LLM or PPO is promotion-ready
+LLM tail latency is safe for online play
+```
+
+Before training, implement a replay/live backend with correct transition
+ordering, collect episode-level holdouts, freeze evaluation scenarios, and
+define promotion gates. See `doc/GAME_AI_ENGINEERING_PORTFOLIO.md` for the
+architecture narrative and interview-oriented project walkthrough.

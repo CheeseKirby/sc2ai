@@ -95,13 +95,15 @@ class SC2StrategyPPOEnv(gym.Env):
 
         state_after = _normalize_observation(transition.state_after)
         after_vector = strategy_observation_dict_to_vector(state_after)
-        reward = self.reward_calculator.calculate(transition)
+        reward_components = self.reward_calculator.calculate_components(transition)
+        reward = float(sum(reward_components.values()))
         info = dict(transition.info)
         info.update(
             {
                 "action_name": selected_action.name,
                 "execution_result": asdict(transition.execution_result),
                 "outcome": transition.outcome,
+                "reward_components": reward_components,
             }
         )
         self._current_observation = state_after
