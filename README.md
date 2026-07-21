@@ -3,10 +3,6 @@
 这是一个 StarCraft II 神族 Bot 项目，目标是逐步做出一个能感知战局、解释思路、并根据局势调整打法的对战 AI。
 
 
-## 项目亮点：Hybrid Game AI Strategy Lab
-
-项目提供一个不启动 SC2、不调用 LLM API、也不训练模型的离线策略竞技场，用同一套 40 维观测和 8 类宏观动作比较 heuristic、random、stay-course、PPO checkpoint 和结构化 LLM planner。
-
 ```powershell
 .\.venv\Scripts\python.exe scripts\benchmark_strategy_lab.py --policies heuristic random stay-course --episodes-per-scenario 4
 ```
