@@ -133,5 +133,5 @@ LLM tail latency is safe for online play
 
 Before training, implement a replay/live backend with correct transition
 ordering, collect episode-level holdouts, freeze evaluation scenarios, and
-define promotion gates. See `doc/GAME_AI_ENGINEERING_PORTFOLIO.md` for the
-architecture narrative and interview-oriented project walkthrough.
+define promotion gates. See `doc/HYBRID_STRATEGY_LAB.md` for the
+architecture, scenario definitions, metrics, and module overview.

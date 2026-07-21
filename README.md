@@ -7,7 +7,6 @@
 已完成：
 
 - 神族规则 baseline Bot
-- 隐藏窗口安全启动和 window guard
 - `ArmyPolicy` 策略抽象
 - 5 个高层军队动作
 - schema v3 数值观测，26 维
@@ -57,7 +56,7 @@
 LLM strategy 显式启用示例：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\safe_launch.py --keep-guard -- --strategy-policy llm
+.\.venv\Scripts\python.exe run.py --strategy-policy llm
 ```
 
 PPO checkpoint 在线推理接线：
@@ -74,10 +73,10 @@ PPO / LLM 框架边界和扩展点见 `doc\PPO_LLM_FRAMEWORK.md`。
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-安全跑一局：
+运行一局：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\safe_launch.py --keep-guard --guard-interval 0.02 -- --difficulty VeryEasy --opponent Protoss --hide-watch-seconds 120 --hide-watch-interval 0.02
+.\.venv\Scripts\python.exe run.py --difficulty VeryEasy --opponent Protoss
 ```
 
 诊断 trajectory：
