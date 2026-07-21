@@ -40,25 +40,6 @@
 - 在线 `RETREAT_HOME` 仍然低频，`RALLY` / `HOLD` 仍然占主导。
 - 在 v3 baseline 更稳定，或策略层被有计划地扩展之前，不建议开始 PPO。
 
-## 安全启动规则
-
-用户可能正在同一台机器上工作。不要暴露 SC2 或 Battle.net 窗口。
-
-任何可能启动 SC2 的命令之前，都必须先启动或确认隐藏窗口 guard：
-
-```powershell
-.\.venv\Scripts\python.exe -c "from scripts.safe_launch import ensure_guard_running, find_existing_guard; ensure_guard_running(0.02); print(find_existing_guard())"
-```
-
-优先使用：
-
-```text
-scripts/evaluate.py
-scripts/safe_launch.py
-```
-
-除非用户明确要求可见调试，不要直接裸跑可见 `run.py`。
-
 ## 常用命令
 
 环境检查：
