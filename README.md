@@ -2,13 +2,6 @@
 
 这是一个 StarCraft II 神族 Bot 项目，目标是逐步做出一个能感知战局、解释思路、并根据局势调整打法的对战 AI。
 
-
-```powershell
-.\.venv\Scripts\python.exe scripts\benchmark_strategy_lab.py --policies heuristic random stay-course --episodes-per-scenario 4
-```
-
-输出包含标准实验元数据、汇总报告和逐步 JSONL 决策轨迹，覆盖 reward 分解、动作阻塞、fallback、延迟和分场景结果。求职展示导览见 `doc\GAME_AI_ENGINEERING_PORTFOLIO.md`。
-
 ## 当前状态
 
 已完成：
